@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=MyGdrive Rust
+Comment=Manage Google Drive synchronization
+Comment[id]=Kelola sinkronisasi Google Drive
+Exec=mygdrive-desktop
+Icon=mygdrive
+Terminal=false
+Categories=Network;FileTransfer;
+StartupWMClass=io.mygdrive.Desktop
+X-MyGDrive-Managed=true

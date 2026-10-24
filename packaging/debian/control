@@ -1,0 +1,15 @@
+Source: mygdrive-rust
+Section: net
+Priority: optional
+Maintainer: MyGdrive Rust contributors
+Rules-Requires-Root: no
+
+Package: mygdrive-rust
+Architecture: any
+Depends: @DEPENDS@, fuse3, python3, xdg-utils
+Recommends: gvfs, libnotify-bin
+Suggests: thunar, zenity
+Description: Google Drive desktop client written in Rust
+ MyGdrive Rust provides a GTK 4 dashboard, a command-line sync engine,
+ preserve-both conflict handling, and an optional on-demand FUSE drive.
+ Google OAuth desktop credentials are supplied by the user.

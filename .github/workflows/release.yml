@@ -1,0 +1,81 @@
+name: Release Debian package
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify release version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+          expected = f"v{version}"
+          if os.environ["RELEASE_TAG"] != expected:
+              raise SystemExit(f"Tag must match Cargo.toml version: {expected}")
+          PY
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential pkg-config libgtk-4-dev dpkg-dev
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+      - name: Check formatting and lint
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-features --all-targets -- -D warnings
+      - name: Run tests
+        run: cargo test --locked --all-features --all-targets
+      - name: Build Debian package
+        run: scripts/build-deb.sh
+      - name: Inspect package
+        run: |
+          dpkg-deb --info dist/*.deb
+          dpkg-deb --contents dist/*.deb
+      - name: Publish Debian package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          shopt -s nullglob
+          packages=(dist/*.deb)
+          if [[ ${#packages[@]} -ne 1 ]]; then
+            echo "Expected exactly one Debian package" >&2
+            exit 1
+          fi
+          package="${packages[0]}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            asset_name="$(basename "$package")"
+            if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fxq "$asset_name"; then
+              echo "Release already contains $asset_name"
+            else
+              gh release upload "$RELEASE_TAG" "$package"
+            fi
+          else
+            gh release create "$RELEASE_TAG" "$package" --verify-tag \
+              --title "MyGdrive Rust $RELEASE_TAG" --notes-file CHANGELOG.md
+          fi
