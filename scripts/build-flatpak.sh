@@ -67,10 +67,10 @@ done
 flatpak build-finish --command=mygdrive --share=network --share=ipc \
     --socket=wayland --socket=fallback-x11 --device=dri --filesystem=home \
     '--own-name=io.mygdrive.*' --talk-name=org.kde.StatusNotifierWatcher \
-    --env=GTK_USE_PORTAL=1 "$build_dir"
+    --env=GTK_USE_PORTAL=1 --env=XDG_DATA_HOME=/var/data "$build_dir"
 # Verify the executables against the actual GNOME runtime before exporting.
-flatpak build "$build_dir" /app/bin/mygdrive-sync --version
-flatpak build "$build_dir" /app/bin/mygdrive-desktop --help >/dev/null
+env -u LD_LIBRARY_PATH flatpak build "$build_dir" /app/bin/mygdrive-sync --version
+env -u LD_LIBRARY_PATH flatpak build "$build_dir" /app/bin/mygdrive-desktop --help >/dev/null
 flatpak build-export --arch="$architecture" "$work_dir/repo" "$build_dir" stable
 output="$project_dir/dist/mygdrive-rust_${version}_${architecture}.flatpak"
 flatpak build-bundle --arch="$architecture" \
