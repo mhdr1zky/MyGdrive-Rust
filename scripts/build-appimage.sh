@@ -44,6 +44,11 @@ ln -s mygdrive.svg "$app_dir/.DirIcon"
 for document in README.md CHANGELOG.md OAUTH_SETUP.md LICENSE docs/PERFORMANCE.md docs/screenshots/*.png; do
     install -Dm644 "$document" "$app_dir/usr/share/doc/mygdrive-rust/$document"
 done
+install -d "$app_dir/usr/share/metainfo"
+python3 - "$version" "$app_dir/usr/share/metainfo/mygdrive.appdata.xml" <<'PYMETA'
+import pathlib,sys
+pathlib.Path(sys.argv[2]).write_text(pathlib.Path('packaging/appimage/mygdrive.appdata.xml.in').read_text().replace('@VERSION@',sys.argv[1]))
+PYMETA
 env -u LD_LIBRARY_PATH python3 scripts/package-appimage-deps.py "$app_dir"
 # Validate the portable entrypoints before making a single-file image.
 "$app_dir/AppRun" --sync --version
@@ -52,4 +57,7 @@ env -u LD_LIBRARY_PATH python3 scripts/package-appimage-deps.py "$app_dir"
 output="$project_dir/dist/mygdrive-rust_${version}_x86_64.AppImage"
 ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 .tools/appimage/appimagetool-1.9.1.AppImage \
     --runtime-file "$project_dir/.tools/appimage/runtime-20251108-x86_64" "$app_dir" "$output"
+APPIMAGE_EXTRACT_AND_RUN=1 "$output" --sync --version
+APPIMAGE_EXTRACT_AND_RUN=1 "$output" --help >/dev/null
+APPIMAGE_EXTRACT_AND_RUN=1 "$output" --mount --help >/dev/null
 printf '\nAppImage: %s\n' "$output"
