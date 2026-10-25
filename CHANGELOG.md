@@ -1,5 +1,23 @@
 # Catatan rilis
 
+## v1.0.2 — 25 Oktober 2026
+
+- Kegagalan izin saat membaca metadata satu file tidak lagi menghentikan
+  pemrosesan file lain. Penyebabnya tersimpan per file dan dicoba kembali;
+  kegagalan akun, koneksi, dan pembatasan permintaan tetap menghentikan siklus.
+- Pembangunan ulang inventaris menandai item lama yang tidak ditemukan sebagai
+  tidak tersedia setelah seluruh daftar selesai. Daftar parsial dan restart
+  tidak menghilangkan namespace lama atau perubahan lokal yang belum diunggah.
+- Salinan outbox unggahan normal yang sudah selesai dibersihkan secara otomatis.
+  Antrean aktif, operasi dibatalkan, konflik, berkas perlu tinjauan, serta blob
+  tanpa jurnal tetap dilindungi. Riwayat operasi selesai tetap tersedia.
+- Aktivitas sinkronisasi menampilkan penyebab kegagalan dan tindakan pemulihan
+  untuk izin file, kuota, login, koneksi, batas layanan, dan penyimpanan lokal.
+
+- Skrip publikasi GitHub satu perintah dengan pratinjau, penyaringan berkas
+  privat/hasil build, checkout terpisah, dan perlindungan konflik. Tes skrip
+  serta launcher dijalankan otomatis melalui GitHub Actions.
+
 ## v1.0.1 — 25 Oktober 2026
 
 - Paket AppImage x86_64 untuk dashboard, sinkronisasi folder lokal, pilihan

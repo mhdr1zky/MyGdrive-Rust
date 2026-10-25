@@ -35,6 +35,7 @@ struct FakeDrive {
     download_calls: AtomicUsize,
     get_calls: Mutex<Vec<String>>,
     get_override: Mutex<Option<(String, usize, Option<RemoteFile>)>>,
+    get_failure: Mutex<Option<(String, u16, String)>>,
     hold_get_after: Mutex<Option<(String, usize)>>,
     hold_download: AtomicBool,
     fail_download_midstream: AtomicBool,
@@ -58,6 +59,7 @@ impl FakeDrive {
             download_calls: AtomicUsize::new(0),
             get_calls: Mutex::new(Vec::new()),
             get_override: Mutex::new(None),
+            get_failure: Mutex::new(None),
             hold_get_after: Mutex::new(None),
             hold_download: AtomicBool::new(false),
             fail_download_midstream: AtomicBool::new(false),
@@ -171,6 +173,14 @@ impl DriveClient for FakeDrive {
         })
     }
     async fn get(&self, id: &str) -> Result<Option<RemoteFile>> {
+        if let Some((target, status, reason)) = self.get_failure.lock().unwrap().as_ref() {
+            if target == id {
+                return Err(Error::Http {
+                    status: *status,
+                    reason: reason.clone(),
+                });
+            }
+        }
         self.get_calls.lock().unwrap().push(id.into());
         self.check()?;
         if self.hold_get.swap(false, Ordering::SeqCst) {
@@ -1147,6 +1157,7 @@ fn reconcile_uses_baseline_and_not_wall_clock() {
         materialized: true,
         review_required: false,
         available_offline: false,
+        metadata_issue: None,
     };
     let mut metadata = remote.clone();
     metadata.version = "2000".into();
@@ -5730,4 +5741,392 @@ async fn scanner_reuses_stable_fingerprints_but_detects_edits_with_restored_mtim
     assert_eq!(after.modified_ns, before.modified_ns);
     assert_ne!(after.changed_ns, before.changed_ns);
     assert_ne!(after.digest, before.digest);
+}
+
+#[tokio::test]
+async fn file_permission_failure_does_not_block_other_pins_and_recovers_after_restart() {
+    use mygdrive_sync::{dashboard, diagnostics::FileIssue, service::ServiceConfig};
+    let fixture = Fixture::new(true);
+    fixture.drive.put("blocked", "a.txt", b"restricted");
+    fixture.drive.put("healthy", "z.txt", b"available");
+    let engine = SyncEngine::open(
+        &fixture.root,
+        &fixture.state,
+        "test",
+        "root",
+        fixture.drive.clone(),
+    )
+    .await
+    .unwrap();
+    engine.sync_once().await.unwrap();
+    for remote in ["blocked", "healthy"] {
+        let file = engine.db.by_remote(remote).await.unwrap().unwrap();
+        engine.set_available_offline(&file.id, true).await.unwrap();
+    }
+    *fixture.drive.get_failure.lock().unwrap() =
+        Some(("blocked".into(), 403, "insufficientFilePermissions".into()));
+    let report = engine.sync_once().await.unwrap();
+    assert_eq!(report.errors.len(), 1);
+    assert_eq!(
+        std::fs::read(fixture.root.join("z.txt")).unwrap(),
+        b"available"
+    );
+    assert!(!fixture.root.join("a.txt").exists());
+    assert_eq!(
+        engine
+            .db
+            .by_remote("blocked")
+            .await
+            .unwrap()
+            .unwrap()
+            .metadata_issue,
+        Some(FileIssue::Permission)
+    );
+    std::fs::write(
+        mygdrive_sync::service::config_path(&fixture.state),
+        serde_json::to_vec(&ServiceConfig {
+            version: 1,
+            account: "test".into(),
+            root: fixture.root.clone(),
+            drive_folder: "root".into(),
+            interval_seconds: 10,
+            cache_max_bytes: None,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let page = dashboard::read_activity_page(&fixture.state).await.unwrap();
+    assert_eq!(page.pending_files, 1);
+    assert_eq!(page.retry_operations, 1);
+    assert!(page
+        .items
+        .iter()
+        .any(|i| i.path == "a.txt" && i.retrying && i.detail.contains("Izin file ditolak")));
+    let blocked = engine.db.by_remote("blocked").await.unwrap().unwrap();
+    engine
+        .set_available_offline(&blocked.id, false)
+        .await
+        .unwrap();
+    assert!(engine.sync_once().await.unwrap().errors.is_empty());
+    assert!(engine
+        .db
+        .file(&blocked.id)
+        .await
+        .unwrap()
+        .metadata_issue
+        .is_none());
+    assert_eq!(
+        dashboard::read_activity_page(&fixture.state)
+            .await
+            .unwrap()
+            .pending_files,
+        0
+    );
+    engine
+        .set_available_offline(&blocked.id, true)
+        .await
+        .unwrap();
+    assert_eq!(engine.sync_once().await.unwrap().errors.len(), 1);
+    drop(engine);
+    *fixture.drive.get_failure.lock().unwrap() = None;
+    let engine = SyncEngine::open(
+        &fixture.root,
+        &fixture.state,
+        "test",
+        "root",
+        fixture.drive.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(engine.sync_once().await.unwrap().errors.is_empty());
+    assert_eq!(
+        std::fs::read(fixture.root.join("a.txt")).unwrap(),
+        b"restricted"
+    );
+    assert!(engine
+        .db
+        .by_remote("blocked")
+        .await
+        .unwrap()
+        .unwrap()
+        .metadata_issue
+        .is_none());
+    assert_eq!(
+        dashboard::read_activity_page(&fixture.state)
+            .await
+            .unwrap()
+            .pending_files,
+        0
+    );
+}
+
+#[tokio::test]
+async fn metadata_rate_limit_still_stops_the_account_cycle() {
+    let fixture = Fixture::new(true);
+    let engine = fixture.synced().await;
+    *fixture.drive.get_failure.lock().unwrap() =
+        Some(("original".into(), 403, "rateLimitExceeded".into()));
+    assert!(
+        matches!(engine.sync_once().await, Err(Error::Http { status: 403, reason }) if reason == "rateLimitExceeded")
+    );
+    assert!(engine
+        .db
+        .by_remote("original")
+        .await
+        .unwrap()
+        .unwrap()
+        .metadata_issue
+        .is_none());
+}
+
+#[tokio::test]
+async fn rejected_cursor_removes_missing_online_entries_without_deleting_local_edits() {
+    let fixture = Fixture::new(true);
+    fixture.drive.put("gone", "gone.txt", b"old remote");
+    fixture.drive.put("edited", "edited.txt", b"baseline");
+    let engine = SyncEngine::open(
+        &fixture.root,
+        &fixture.state,
+        "test",
+        "root",
+        fixture.drive.clone(),
+    )
+    .await
+    .unwrap();
+    engine.sync_once().await.unwrap();
+    let edited = engine.db.by_remote("edited").await.unwrap().unwrap();
+    engine
+        .set_available_offline(&edited.id, true)
+        .await
+        .unwrap();
+    engine.sync_once().await.unwrap();
+    std::fs::write(fixture.root.join("edited.txt"), b"local unsent changes").unwrap();
+    fixture.drive.files.lock().unwrap().remove("gone");
+    fixture.drive.files.lock().unwrap().remove("edited");
+    fixture
+        .drive
+        .reject_cursor_once
+        .store(true, Ordering::SeqCst);
+    engine.sync_once().await.unwrap();
+    let view = mygdrive_sync::cloud_view::View::load(&engine.db)
+        .await
+        .unwrap();
+    assert!(!view.entries.contains_key("gone.txt"));
+    assert!(view.entries.contains_key("edited.txt"));
+    assert_eq!(
+        std::fs::read(fixture.root.join("edited.txt")).unwrap(),
+        b"local unsent changes"
+    );
+    assert!(engine
+        .db
+        .remotes()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.id != "root")
+        .all(|r| r.unavailable));
+    assert_eq!(fixture.drive.files.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn interrupted_inventory_retains_old_namespace_until_complete_after_restart() {
+    let fixture = Fixture::new(true);
+    fixture.drive.put("gone", "gone.txt", b"old");
+    fixture.drive.put("kept", "kept.txt", b"keep");
+    let engine = SyncEngine::open(
+        &fixture.root,
+        &fixture.state,
+        "test",
+        "root",
+        fixture.drive.clone(),
+    )
+    .await
+    .unwrap();
+    engine.sync_once().await.unwrap();
+    engine.db.reset_inventory().await.unwrap();
+    let kept = fixture.drive.get("kept").await.unwrap().unwrap();
+    engine
+        .db
+        .remote_page(&[kept], "inventory", "page-two")
+        .await
+        .unwrap();
+    assert!(mygdrive_sync::cloud_view::View::load(&engine.db)
+        .await
+        .unwrap()
+        .entries
+        .contains_key("gone.txt"));
+    drop(engine);
+    let engine = SyncEngine::open(
+        &fixture.root,
+        &fixture.state,
+        "test",
+        "root",
+        fixture.drive.clone(),
+    )
+    .await
+    .unwrap();
+    engine
+        .db
+        .remote_page(&[], "inventory", "complete")
+        .await
+        .unwrap();
+    let view = mygdrive_sync::cloud_view::View::load(&engine.db)
+        .await
+        .unwrap();
+    assert!(!view.entries.contains_key("gone.txt"));
+    assert!(view.entries.contains_key("kept.txt"));
+    assert!(
+        !engine
+            .db
+            .remotes()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == "root")
+            .unwrap()
+            .unavailable
+    );
+}
+
+#[tokio::test]
+async fn completed_uploads_release_snapshots_and_keep_cloud_and_activity_history() {
+    let fixture = Fixture::new(true);
+    let engine = fixture.engine().await;
+    for bytes in [b"version one".as_slice(), b"version two", b"version three"] {
+        std::fs::write(fixture.root.join("report.txt"), bytes).unwrap();
+        assert!(engine.sync_once().await.unwrap().errors.is_empty());
+        assert!(engine.db.operations().await.unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(fixture.state.join("outbox"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    let file = engine.db.files().await.unwrap().pop().unwrap();
+    assert_eq!(
+        fixture.drive.data(file.remote_id.as_ref().unwrap()),
+        b"version three"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM sync_operations WHERE stage='done'")
+        .fetch_one(&engine.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 3);
+}
+
+#[tokio::test]
+async fn upload_cleanup_preserves_active_cancelled_review_and_conflict_snapshots() {
+    let fixture = Fixture::new(true);
+    let engine = fixture.synced().await;
+    let file = engine.db.by_remote("original").await.unwrap().unwrap();
+    let mut paths = Vec::new();
+    for stage in ["snapshot_ready", "cancelled"] {
+        let snapshot = engine
+            .cache
+            .snapshot(&fixture.root.join("note.txt"))
+            .await
+            .unwrap();
+        paths.push(snapshot.path.clone());
+        let mut op = Operation::new(
+            &file,
+            "upload",
+            file.baseline.as_ref().map(|b| b.remote.clone()),
+        );
+        op.key = format!("cleanup-protected:{}", op.id);
+        op.stage = stage.into();
+        op.snapshot = Some(snapshot);
+        engine.db.operation(&op).await.unwrap();
+    }
+    // A completed job can share a blob with an active journal: protect it too.
+    let mut shared = Operation::new(&file, "upload", None);
+    shared.key = format!("cleanup-shared:{}", shared.id);
+    shared.stage = "done".into();
+    shared.snapshot = Some(Snapshot {
+        path: paths[0].clone(),
+        digest: file.fingerprint.as_ref().unwrap().digest.clone(),
+    });
+    engine.db.operation(&shared).await.unwrap();
+    let orphan = engine
+        .cache
+        .snapshot(&fixture.root.join("note.txt"))
+        .await
+        .unwrap();
+    engine.prune_cache(0).await.unwrap();
+    for path in &paths {
+        assert!(path.exists());
+    }
+    assert!(orphan.path.exists());
+    let conflict_snapshot = engine
+        .cache
+        .snapshot(&fixture.root.join("note.txt"))
+        .await
+        .unwrap();
+    let mut conflict = Operation::new(&file, "upload", None);
+    conflict.key = format!("cleanup-conflict:{}", conflict.id);
+    conflict.stage = "done".into();
+    conflict.snapshot = Some(conflict_snapshot.clone());
+    engine
+        .db
+        .conflict(&conflict, "preserved-conflict.txt")
+        .await
+        .unwrap();
+    engine.db.operation(&conflict).await.unwrap();
+    engine.prune_cache(0).await.unwrap();
+    assert!(conflict_snapshot.path.exists());
+    // Explicit review protects completed snapshots even without a conflict row.
+    let mut review = file;
+    review.review_required = true;
+    review.status = "recovery_review".into();
+    engine.db.save_file(&review).await.unwrap();
+    let snapshot = engine
+        .cache
+        .snapshot(&fixture.root.join("note.txt"))
+        .await
+        .unwrap();
+    let mut op = Operation::new(&review, "create", None);
+    op.key = format!("cleanup-review:{}", op.id);
+    op.stage = "done".into();
+    op.snapshot = Some(snapshot.clone());
+    engine.db.operation(&op).await.unwrap();
+    engine.prune_cache(0).await.unwrap();
+    assert!(snapshot.path.exists());
+}
+
+#[tokio::test]
+async fn upload_cleanup_recovers_missing_completed_blob_and_rejects_external_path() {
+    let fixture = Fixture::new(true);
+    let engine = fixture.synced().await;
+    let file = engine.db.by_remote("original").await.unwrap().unwrap();
+    let snapshot = engine
+        .cache
+        .snapshot(&fixture.root.join("note.txt"))
+        .await
+        .unwrap();
+    let mut op = Operation::new(&file, "upload", None);
+    op.key = format!("cleanup-interrupted:{}", op.id);
+    op.stage = "done".into();
+    op.snapshot = Some(snapshot.clone());
+    engine.db.operation(&op).await.unwrap();
+    std::fs::remove_file(&snapshot.path).unwrap();
+    engine.prune_cache(0).await.unwrap();
+    let saved: String = sqlx::query_scalar("SELECT data FROM sync_operations WHERE id=?")
+        .bind(&op.id)
+        .fetch_one(&engine.db.pool)
+        .await
+        .unwrap();
+    assert!(serde_json::from_str::<Operation>(&saved)
+        .unwrap()
+        .snapshot
+        .is_none());
+    op.snapshot = Some(Snapshot {
+        path: fixture.root.join("note.txt"),
+        digest: snapshot.digest,
+    });
+    engine.db.save_operation(&op).await.unwrap();
+    assert!(engine.prune_cache(0).await.is_err());
+    assert_eq!(
+        std::fs::read(fixture.root.join("note.txt")).unwrap(),
+        b"baseline"
+    );
 }

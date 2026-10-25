@@ -161,10 +161,9 @@ impl Popup {
                 name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
                 name.set_tooltip_text(Some(&item.path));
                 card.append(&name);
-                card.append(&label(
-                    &format!("{} · {}", item.operation, item.detail),
-                    "subtitle",
-                ));
+                let detail = label(&format!("{} · {}", item.operation, item.detail), "subtitle");
+                detail.set_wrap(true);
+                card.append(&detail);
                 self.list.append(&card);
             }
             *self.signature.borrow_mut() = signature;

@@ -787,7 +787,7 @@ pub async fn run(
             },
             _ = heartbeat.tick() => {
                 let pending_ops=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM sync_operations WHERE stage NOT IN ('done','cancelled')").fetch_one(&readers.control.pool).await;
-                let pending_files=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM files WHERE sync_status NOT IN ('synced','online_only','tombstone')").fetch_one(&readers.control.pool).await;
+                let pending_files=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM files WHERE sync_status NOT IN ('synced','online_only','tombstone') OR json_extract(data,'$.metadata_issue') IS NOT NULL").fetch_one(&readers.control.pool).await;
                 let snapshot = {
                     let mut c = shared.lock().await;
                     c.status.heartbeat_at_ms = now_ms();

@@ -471,7 +471,24 @@ async fn prefetched_missing_or_denied_metadata_preserves_local_bytes_and_can_ret
         );
         let result = fixture.engine.sync_once().await;
         if denied {
-            assert!(matches!(result, Err(Error::Http { status: 403, .. })));
+            let report = result.unwrap();
+            assert_eq!(report.errors.len(), 1, "{report:?}");
+            assert_eq!(
+                fixture
+                    .engine
+                    .db
+                    .by_remote("item-000")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .metadata_issue,
+                Some(mygdrive_sync::diagnostics::FileIssue::Permission)
+            );
+            assert_eq!(
+                fixture.drive.file_get_calls.load(Ordering::SeqCst),
+                4,
+                "a denied metadata response must not cancel checks for healthy peers"
+            );
         } else {
             let report = result.unwrap();
             assert!(report.errors.is_empty(), "{report:?}");
@@ -513,5 +530,14 @@ async fn prefetched_missing_or_denied_metadata_preserves_local_bytes_and_can_ret
             "synced"
         );
         assert_eq!(fixture.drive.download_calls.load(Ordering::SeqCst), 4);
+        assert!(fixture
+            .engine
+            .db
+            .by_remote("item-000")
+            .await
+            .unwrap()
+            .unwrap()
+            .metadata_issue
+            .is_none());
     }
 }

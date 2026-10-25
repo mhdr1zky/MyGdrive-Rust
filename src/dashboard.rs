@@ -346,7 +346,7 @@ pub async fn read_activity_page(state: &Path) -> Result<ActivityPage> {
     let config = service::load_config(state)?;
     let db = crate::db::Database::read_only(&state.join("state.sqlite3"), &config.account).await?;
     let mut tx = db.pool.begin().await?;
-    let local="f.sync_status IN ('new_local','modified_local','deleted_local') AND coalesce(json_extract(f.data,'$.review_required'),0)=0";
+    let local="(f.sync_status IN ('new_local','modified_local','deleted_local') OR json_extract(f.data,'$.metadata_issue') IS NOT NULL) AND coalesce(json_extract(f.data,'$.review_required'),0)=0";
     let count_sql=format!("SELECT count(*) FROM (SELECT file_id FROM sync_operations WHERE stage NOT IN ('done','cancelled') UNION SELECT f.id FROM files f WHERE {local})");
     let pending_files = sqlx::query_scalar::<_, i64>(&count_sql)
         .fetch_one(&mut *tx)
@@ -355,7 +355,7 @@ pub async fn read_activity_page(state: &Path) -> Result<ActivityPage> {
     let pending_deletions = sqlx::query_scalar::<_, i64>(&delete_sql)
         .fetch_one(&mut *tx)
         .await? as usize;
-    let retry_operations=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM sync_operations WHERE stage NOT IN ('done','cancelled') AND json_extract(data,'$.last_error') IS NOT NULL").fetch_one(&mut *tx).await? as usize;
+    let retry_operations=sqlx::query_scalar::<_,i64>("SELECT (SELECT count(*) FROM sync_operations WHERE stage NOT IN ('done','cancelled') AND json_extract(data,'$.last_error') IS NOT NULL) + (SELECT count(*) FROM files f WHERE json_extract(f.data,'$.metadata_issue') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sync_operations o WHERE o.file_id=f.id AND o.stage NOT IN ('done','cancelled') AND json_extract(o.data,'$.last_error') IS NOT NULL))").fetch_one(&mut *tx).await? as usize;
     let mut result = Vec::new();
     for done in [false, true] {
         let query = if done {
@@ -377,8 +377,10 @@ pub async fn read_activity_page(state: &Path) -> Result<ActivityPage> {
             .to_string();
             let detail = if done {
                 "Selesai".into()
-            } else if op.last_error.is_some() {
-                "Tertunda — akan dicoba ulang otomatis".into()
+            } else if let Some(error) = &op.last_error {
+                crate::diagnostics::FileIssue::from_legacy(error)
+                    .description()
+                    .into()
             } else {
                 match op.stage.as_str() {
                     "planned" => "Dalam antrean",
@@ -415,9 +417,13 @@ pub async fn read_activity_page(state: &Path) -> Result<ActivityPage> {
                         "Unggah / ubah"
                     }
                     .into(),
-                    detail: "Perubahan tercatat — menunggu giliran sinkronisasi".into(),
+                    detail: file
+                        .metadata_issue
+                        .map(|issue| issue.description())
+                        .unwrap_or("Perubahan tercatat — menunggu giliran sinkronisasi")
+                        .into(),
                     pending: true,
-                    retrying: false,
+                    retrying: file.metadata_issue.is_some(),
                 });
             }
         }

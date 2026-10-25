@@ -94,6 +94,8 @@ pub struct LocalFile {
     pub review_required: bool,
     #[serde(default)]
     pub available_offline: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_issue: Option<crate::diagnostics::FileIssue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

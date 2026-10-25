@@ -34,3 +34,5 @@ jobs:
         run: cargo test --locked --all-targets
       - name: Test all features
         run: cargo test --locked --all-features --all-targets
+      - name: Test launchers and GitHub publication script
+        run: python3 -m unittest discover -s tests -p 'test_*.py'

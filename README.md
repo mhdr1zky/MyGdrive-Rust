@@ -2,9 +2,9 @@
 
 Sinkronisasi Google Drive untuk Linux, ditulis dengan Rust. Akses My Drive dari desktop dan pengelola berkas, unduh konten saat dibutuhkan, lalu pilih file atau folder yang ingin tetap tersedia tanpa internet.
 
-**Rilis terbaru: [v1.0.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.1)** — paket `.deb` amd64 untuk Ubuntu 24.04/Linux Mint 22 dan AppImage x86_64. Proyek ini independen dan tidak berafiliasi dengan Google.
+**Rilis terbaru: [v1.0.2](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.2)** — paket `.deb` amd64 untuk Ubuntu 24.04/Linux Mint 22 dan AppImage x86_64. Proyek ini independen dan tidak berafiliasi dengan Google.
 
-Versi ini memperbaiki antrean file baru yang sudah dihapus sebelum unggah, pilihan offline mandiri/rekursif, pelepasan ruang disk setelah unpin, serta waktu pemeriksaan sinkronisasi. Lihat [catatan rilis](CHANGELOG.md).
+Versi ini memperbaiki isolasi kegagalan izin per file, pembaruan inventaris setelah cursor ditolak, pembersihan salinan unggahan selesai, serta pesan kegagalan yang lebih jelas. Skrip commit/push GitHub satu perintah juga tersedia. Lihat [catatan rilis](CHANGELOG.md).
 
 ## Preview aplikasi
 
@@ -42,33 +42,33 @@ Tangkapan layar aplikasi di Linux, menggunakan profil dan berkas contoh. Tampila
 
 ## Menjalankan AppImage
 
-Unduh `mygdrive-rust_1.0.1_x86_64.AppImage` dari [rilis v1.0.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.1), lalu jalankan:
+Unduh `mygdrive-rust_1.0.2_x86_64.AppImage` dari [rilis v1.0.2](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.2), lalu jalankan:
 
 ```bash
-chmod +x mygdrive-rust_1.0.1_x86_64.AppImage
-./mygdrive-rust_1.0.1_x86_64.AppImage
+chmod +x mygdrive-rust_1.0.2_x86_64.AppImage
+./mygdrive-rust_1.0.2_x86_64.AppImage
 # CLI dan helper drive virtual:
-./mygdrive-rust_1.0.1_x86_64.AppImage --sync --help
-./mygdrive-rust_1.0.1_x86_64.AppImage --mount --help
+./mygdrive-rust_1.0.2_x86_64.AppImage --sync --help
+./mygdrive-rust_1.0.2_x86_64.AppImage --mount --help
 ```
 
 AppImage x86_64 ditargetkan untuk **Ubuntu 24.04/Linux Mint 22 atau sistem dengan glibc 2.39+**. Pustaka GTK disertakan; driver grafis, font, browser, dan layanan desktop memakai sistem host. Ini bukan sandbox. Data/token memakai lokasi native yang sama (`~/.local/share/mygdrive/`); jangan jalankan `.deb` dan AppImage bersamaan pada profil yang sama.
 
-Runtime AppImage memakai FUSE; jika mount AppImage tidak didukung, jalankan `./mygdrive-rust_1.0.1_x86_64.AppImage --appimage-extract-and-run`. Drive virtual aplikasi tetap membutuhkan dukungan FUSE host dan izin `/dev/fuse` tersendiri. AppImage tidak memasang menu konteks/badge Thunar secara otomatis dan tidak memulai mount online secara otomatis. Untuk mount manual, gunakan `--mount --state /path/profil --mount /path/mount`; siapkan direktori mount kosong. Gunakan `.deb` untuk launcher mount dan integrasi Thunar terkelola.
+Runtime AppImage memakai FUSE; jika mount AppImage tidak didukung, jalankan `./mygdrive-rust_1.0.2_x86_64.AppImage --appimage-extract-and-run`. Drive virtual aplikasi tetap membutuhkan dukungan FUSE host dan izin `/dev/fuse` tersendiri. AppImage tidak memasang menu konteks/badge Thunar secara otomatis dan tidak memulai mount online secara otomatis. Untuk mount manual, gunakan `--mount --state /path/profil --mount /path/mount`; siapkan direktori mount kosong. Gunakan `.deb` untuk launcher mount dan integrasi Thunar terkelola.
 
 Simpan AppImage pada lokasi tetap sebelum mengaktifkan **Mulai saat login**. Untuk memperbarui, tutup aplikasi dan layanan profil, lalu ganti file dengan AppImage versi baru pada lokasi yang sama. Lihat [panduan penggunaan AppImage](https://docs.appimage.org/user-guide/run-appimages.html).
 
 ## Instalasi `.deb`
 
-Unduh `mygdrive-rust_1.0.1_amd64.deb` dari bagian **Releases** repositori, lalu jalankan dari direktori unduhan:
+Unduh `mygdrive-rust_1.0.2_amd64.deb` dari bagian **Releases** repositori, lalu jalankan dari direktori unduhan:
 
 ```bash
-sudo apt install ./mygdrive-rust_1.0.1_amd64.deb
+sudo apt install ./mygdrive-rust_1.0.2_amd64.deb
 ```
 
 `apt` memasang dependensi runtime yang diperlukan. Rust dan compiler tidak diperlukan untuk menjalankan paket. Rilis ini menyediakan paket amd64; ARM, Windows, macOS, dan Debian 12 belum menjadi target paket v1.
 
-Untuk memperbarui v1.0.0, keluar melalui menu **Keluar** agar operasi aktif selesai, lalu instal `.deb` baru. Folder lokal, akun, dan pilihan offline tetap digunakan. Metadata state bermigrasi dari schema 3 ke 4; v1.0.0 tidak dapat membaca state yang sudah dimigrasi. Simpan cadangan state lama bila perlu kembali ke versi sebelumnya.
+Untuk memperbarui v1.0.0 atau v1.0.1, keluar melalui menu **Keluar** agar operasi aktif selesai, lalu instal `.deb` baru. Folder lokal, akun, dan pilihan offline tetap digunakan. Pembaruan dari v1.0.0 memigrasikan metadata state dari schema 3 ke 4; v1.0.0 tidak dapat membaca state yang sudah dimigrasi. Profil v1.0.1 tetap memakai schema 4. Simpan cadangan state lama bila perlu kembali ke versi sebelumnya.
 
 Buka **MyGdrive Rust** dari menu aplikasi atau terminal:
 
@@ -166,7 +166,7 @@ Login menggunakan browser sistem, PKCE, pemeriksaan state, dan callback loopback
 
 Scope `drive` memberi akses baca dan kelola pada seluruh file Drive yang dapat diakses akun. Memilih subfolder hanya membatasi perilaku aplikasi, bukan izin OAuth. Scope `drive-file` lebih terbatas dan tidak otomatis memberi akses ke file lama; integrasi Google Picker belum tersedia. Lihat [penjelasan scope dari Google](https://developers.google.com/workspace/drive/api/guides/api-specific-auth).
 
-## Batas v1.0.1
+## Batas v1.0.2
 
 - Mendukung **My Drive dan file biasa** seperti dokumen Office, PDF, gambar, teks, dan arsip. Isi Google Docs/Sheets/Slides native belum mendukung sinkronisasi dan round-trip.
 - Shared Drives dan seluruh tampilan **Shared with me** belum didukung.
@@ -214,7 +214,7 @@ sudo apt install build-essential pkg-config libgtk-4-dev dpkg-dev python3
 ./scripts/build-deb.sh
 
 # Hasil build lokal.
-sudo apt install ./dist/mygdrive-rust_1.0.1_amd64.deb
+sudo apt install ./dist/mygdrive-rust_1.0.2_amd64.deb
 ```
 
 AppImage memakai binary release dan `Cargo.lock` yang sama:
@@ -244,6 +244,39 @@ cargo test --locked --all-features --all-targets
 ```
 
 Tes otomatis memakai adapter tiruan dan server lokal. Tes live onboarding tetap opt-in. Untuk rilis, samakan versi di `Cargo.toml`, `Cargo.lock`, catatan rilis, dan `.github/release-version`, lalu push ke `main`; workflow menguji, membangun `.deb` dan AppImage, mengunggah checksum, kemudian memublikasikan rilis beserta tag pada commit tersebut. Push tag versi juga didukung. Detail perubahan tersedia pada [catatan rilis](CHANGELOG.md).
+
+## Mengirim perubahan ke GitHub tanpa AI
+
+Jalankan dari terminal dengan Git dan Python 3. Skrip menyalin kode publik ke
+checkout kerja di `artifacts/github-publish/`, membuat commit, lalu push ke
+`mhdr1zky/MyGdrive-Rust`, branch `main`. Folder source hasil unduhan yang belum
+memiliki `.git` juga didukung. Autentikasi dan identitas commit memakai
+konfigurasi Git pengguna; siapkan credential helper Git atau akses SSH sekali.
+
+```bash
+# Pratinjau perubahan; hanya membaca GitHub, tanpa commit atau push.
+./scripts/push-github.sh "fix: perbaikan sinkronisasi" --dry-run
+
+# Commit dan push dalam satu perintah.
+./scripts/push-github.sh "fix: perbaikan sinkronisasi"
+
+# Tujuan lain bila diperlukan.
+./scripts/push-github.sh "update aplikasi" \
+  --repo git@github.com:mhdr1zky/MyGdrive-Rust.git --branch main
+```
+
+Skrip mengikuti `.gitignore` dan membatasi berkas ke source, dokumentasi,
+aset, pengujian, packaging, dan workflow. Kredensial OAuth, token, cache,
+serta paket hasil build dikecualikan. Penghapusan berkas yang pernah dikirim
+dicatat dalam manifest lokal; berkas tambahan dari GitHub tetap dipertahankan.
+Perubahan GitHub yang bertabrakan dan checkout kerja yang belum bersih
+menghentikan publikasi agar dapat diperiksa. Push yang gagal dapat diulang
+dengan perintah yang sama; commit yang sudah dibuat tetap tersimpan.
+
+GitHub Actions menjalankan tes setelah push ke `main`. Build `.deb`, AppImage,
+dan publikasi rilis mengikuti workflow rilis serta penanda versi yang sudah
+dijelaskan di atas. Skrip tidak menaikkan versi rilis secara otomatis dan
+tidak memakai layanan AI.
 
 ## Lisensi
 

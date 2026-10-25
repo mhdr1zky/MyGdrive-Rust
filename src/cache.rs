@@ -73,6 +73,83 @@ impl CacheStore {
         })
     }
 
+    /// Caller serializes cycles and holds the scanner gate and hydration
+    /// lifecycle lock. Only acknowledged normal uploads are reproducible here;
+    /// cancelled jobs, conflicts, recovery and unregistered blobs stay intact.
+    pub(crate) async fn cleanup_completed_uploads(&self) -> Result<()> {
+        let directory = self.root.join("outbox");
+        if !std::fs::symlink_metadata(&directory)?.is_dir() {
+            return Err(Error::Invalid("outbox is not a regular directory".into()));
+        }
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT o.data FROM sync_operations o JOIN files f ON f.id=o.file_id \
+             WHERE o.stage='done' AND json_extract(o.data,'$.kind') IN ('create','upload') \
+             AND json_extract(o.data,'$.snapshot.path') IS NOT NULL \
+             AND coalesce(json_extract(f.data,'$.review_required'),0)=0 \
+             AND f.sync_status NOT LIKE '%review%' \
+             AND NOT EXISTS (SELECT 1 FROM conflicts c WHERE c.resolved=0 AND (c.op_id=o.id OR c.file_id=f.id)) \
+             ORDER BY o.rowid LIMIT 128",
+        ).fetch_all(&self.db.pool).await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let protected: HashSet<PathBuf> = sqlx::query_scalar::<_, String>(
+            "SELECT json_extract(o.data,'$.snapshot.path') FROM sync_operations o JOIN files f ON f.id=o.file_id \
+             WHERE (o.stage!='done' OR json_extract(o.data,'$.kind') NOT IN ('create','upload') \
+             OR coalesce(json_extract(f.data,'$.review_required'),0)!=0 OR f.sync_status LIKE '%review%' \
+             OR EXISTS (SELECT 1 FROM conflicts c WHERE c.resolved=0 AND (c.op_id=o.id OR c.file_id=f.id))) \
+             AND json_extract(o.data,'$.snapshot.path') IS NOT NULL \
+             UNION SELECT json_extract(data,'$.downloaded.path') FROM sync_operations \
+             WHERE stage!='done' AND json_extract(data,'$.downloaded.path') IS NOT NULL",
+        )
+        .fetch_all(&self.db.pool)
+        .await?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+        for data in rows {
+            let op: Operation = serde_json::from_str(&data)?;
+            let Some(snapshot) = op.snapshot else {
+                continue;
+            };
+            let path = &snapshot.path;
+            if protected.contains(path) {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            if path.parent() != Some(directory.as_path())
+                || name
+                    .strip_suffix(".blob")
+                    .is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
+            {
+                return Err(Error::Invalid(
+                    "upload snapshot points outside its registered outbox path".into(),
+                ));
+            }
+            match std::fs::symlink_metadata(path) {
+                Ok(meta) if meta.is_file() => {
+                    std::fs::remove_file(path)?;
+                    sync_directory(&directory)?;
+                }
+                Ok(_) => {
+                    return Err(Error::Invalid(
+                        "upload snapshot is not a regular file".into(),
+                    ))
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
+            }
+            // Persist after unlink. A crash between these steps simply retries
+            // the missing file; the operation's committed result is preserved.
+            sqlx::query("UPDATE sync_operations SET data=json_set(data,'$.snapshot',json('null')) WHERE id=? AND stage='done'")
+                .bind(&op.id).execute(&self.db.pool).await?;
+        }
+        Ok(())
+    }
+
     pub async fn download_to_cache(
         &self,
         drive: &dyn DriveClient,

@@ -55,6 +55,14 @@ pub struct Database {
 impl Database {
     pub async fn reset_inventory(&self) -> Result<()> {
         let mut tx = self.pool.begin().await?;
+        // Keep the old namespace usable until the complete replacement arrives.
+        // Persist candidates across restarts, rather than treating a partial
+        // listing as evidence that a remote item disappeared.
+        sqlx::query("DELETE FROM inventory_missing_candidates")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO inventory_missing_candidates(id) SELECT id FROM remote_observations WHERE id!=coalesce((SELECT value FROM settings WHERE key='resolved_folder'),'')")
+            .execute(&mut *tx).await?;
         sqlx::query(
             "DELETE FROM sync_cursors WHERE name IN ('changes','inventory','bootstrap_start')",
         )
@@ -136,6 +144,9 @@ impl Database {
             .execute(&pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS files_sync_status ON files(sync_status)")
+            .execute(&pool)
+            .await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS inventory_missing_candidates(id TEXT PRIMARY KEY)")
             .execute(&pool)
             .await?;
         sqlx::query(
@@ -349,6 +360,7 @@ impl Database {
                 materialized: true,
                 review_required: false,
                 available_offline: false,
+                metadata_issue: None,
             }
         };
         // A local file can disappear before its first upload (including editor
@@ -525,9 +537,30 @@ impl Database {
         token: &str,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
+        let rebuilding = cursor_name == "inventory"
+            && sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM inventory_missing_candidates)",
+            )
+            .fetch_one(&mut *tx)
+            .await?;
         for remote in files {
             sqlx::query("INSERT INTO remote_observations(id,data,pending) VALUES(?,?,1) ON CONFLICT(id) DO UPDATE SET data=excluded.data,pending=1")
                 .bind(&remote.id).bind(serde_json::to_string(remote)?).execute(&mut *tx).await?;
+            if rebuilding {
+                sqlx::query("DELETE FROM inventory_missing_candidates WHERE id=?")
+                    .bind(&remote.id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        if cursor_name == "inventory" && token == "complete" {
+            // Access loss and deletion are indistinguishable here. Never infer
+            // a cloud Trash or remove local content from an absent listing.
+            sqlx::query("UPDATE remote_observations SET data=json_set(data,'$.unavailable',json('true')),pending=1 WHERE id IN (SELECT id FROM inventory_missing_candidates)")
+                .execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM inventory_missing_candidates")
+                .execute(&mut *tx)
+                .await?;
         }
         sqlx::query("INSERT INTO sync_cursors(name,token) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET token=excluded.token")
             .bind(cursor_name).bind(token).execute(&mut *tx).await?;

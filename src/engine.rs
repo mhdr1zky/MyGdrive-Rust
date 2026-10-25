@@ -138,6 +138,10 @@ impl SyncEngine {
         let _hydrations = self.hydration_lifecycle.write().await;
         self.recover_moves().await?;
         self.scanner.scan().await?;
+        {
+            let _scanner = self.scanner.gate.lock().await;
+            self.cache.cleanup_completed_uploads().await?;
+        }
         self.cache.prune(max_bytes).await
     }
 
@@ -747,6 +751,7 @@ impl SyncEngine {
                 materialized: false,
                 review_required: false,
                 available_offline: false,
+                metadata_issue: None,
             });
         }
         self.db.register_files(&additions).await?;
@@ -809,6 +814,7 @@ impl SyncEngine {
             if active.contains(&snapshot.id)
                 || (online_default
                     && snapshot.status == "online_only"
+                    && snapshot.metadata_issue.is_none()
                     && !snapshot.materialized
                     && snapshot.fingerprint.is_none()
                     && !requested.contains(&snapshot.id)
@@ -832,6 +838,11 @@ impl SyncEngine {
                     .as_ref()
                     .is_some_and(|base| file.relative_path != base.relative_path)
             {
+                if file.metadata_issue.is_some() {
+                    // An unpin cancels a metadata-only download request. Do
+                    // not leave an inactive selection in the error queue.
+                    self.set_metadata_issue(&file.id, None).await?;
+                }
                 if file.status != "online_only" {
                     self.set_status(&file.id, "online_only").await?;
                 }
@@ -863,10 +874,27 @@ impl SyncEngine {
                     // Prefetch owns no file lock. A save, pin change or metadata
                     // intent invalidates its snapshot and requires a fresh GET.
                     let current = match prefetched {
-                        Some(result) if Self::metadata_snapshot_matches(&snapshot, &file) => {
-                            result?
+                        Some(result) if Self::metadata_snapshot_matches(&snapshot, &file) => result,
+                        _ => self.drive.get(id).await,
+                    };
+                    let current = match current {
+                        Ok(current) => {
+                            if file.metadata_issue.is_some() {
+                                self.set_metadata_issue(&file.id, None).await?;
+                                file.metadata_issue = None;
+                            }
+                            current
                         }
-                        _ => self.drive.get(id).await?,
+                        Err(error) if crate::diagnostics::isolated_metadata_error(&error) => {
+                            self.set_metadata_issue(
+                                &file.id,
+                                Some(crate::diagnostics::FileIssue::from_error(&error)),
+                            )
+                            .await?;
+                            report.errors.push(format!("{}: {}", file.id, error));
+                            continue;
+                        }
+                        Err(error) => return Err(error),
                     };
                     match current {
                         Some(remote) => Some(remote),
@@ -1051,6 +1079,16 @@ impl SyncEngine {
             tracing::warn!(%error, "unpinned local cleanup deferred");
             report.errors.push("unpinned local cleanup deferred".into());
         }
+        {
+            let _hydrations = self.hydration_lifecycle.write().await;
+            let _scanner = self.scanner.gate.lock().await;
+            if let Err(error) = self.cache.cleanup_completed_uploads().await {
+                tracing::warn!(%error, "completed upload cleanup deferred");
+                report
+                    .errors
+                    .push("completed upload cleanup deferred".into());
+            }
+        }
         Ok(report)
     }
 
@@ -1181,6 +1219,20 @@ impl SyncEngine {
         }
         current.status = value.into();
         self.db.save_file(&current).await
+    }
+
+    async fn set_metadata_issue(
+        &self,
+        id: &str,
+        issue: Option<crate::diagnostics::FileIssue>,
+    ) -> Result<()> {
+        let _guard = self.scanner.gate.lock().await;
+        let mut current = self.db.file(id).await?;
+        if current.metadata_issue != issue {
+            current.metadata_issue = issue;
+            self.db.save_file(&current).await?;
+        }
+        Ok(())
     }
 
     async fn record_operation_failure(&self, op: &mut Operation, error: &Error) -> Result<bool> {

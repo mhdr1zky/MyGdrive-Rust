@@ -9,6 +9,7 @@ pub mod dashboard;
 pub mod db;
 mod dehydration;
 pub mod desktop;
+pub mod diagnostics;
 pub mod directory_sync;
 pub mod drive;
 #[cfg(feature = "virtual-drive")]
