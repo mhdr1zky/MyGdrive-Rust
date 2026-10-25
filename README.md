@@ -4,6 +4,16 @@ Sinkronisasi Google Drive untuk Linux, ditulis dengan Rust. Akses My Drive dari 
 
 **Rilis v1.0.0 menggunakan paket `.deb` untuk amd64 (x86_64), dengan target Ubuntu 24.04 dan Linux Mint 22.** Paket mencakup dashboard GTK4, CLI, tray, dan mount FUSE. Proyek ini independen dan tidak berafiliasi dengan Google.
 
+## Preview aplikasi
+
+Tangkapan layar versi pengembangan di Linux, menggunakan profil dan berkas contoh. Tampilan paket rilis dapat berbeda dari versi pengembangan.
+
+| Dashboard sinkronisasi | Drive online di Thunar |
+| --- | --- |
+| ![Dashboard MyGdrive Rust](docs/screenshots/dashboard.png) | ![Drive virtual MyGdrive di Thunar](docs/screenshots/online-drive.png) |
+| **Pilihan tersedia offline** | **Detail aktivitas sinkronisasi** |
+| ![Pilihan file dan folder tersedia offline](docs/screenshots/offline-browser.png) | ![Jendela detail aktivitas sinkronisasi](docs/screenshots/sync-activity.png) |
+
 ## Fitur
 
 - **Sinkronisasi dua arah:** unggah, unduh, rename, pindahkan, dan Trash file atau folder dengan pemeriksaan perubahan server.
