@@ -271,5 +271,20 @@
   "Drive membatasi permintaan. Tunggu percobaan ulang otomatis.": "Drive is limiting requests. Wait for automatic retry.",
   "File lokal belum dapat dibaca atau ditulis. Periksa ruang disk dan izin folder; aplikasi akan mencoba lagi.": "Cannot read or write the local file yet. Check disk space and folder permissions; the application will retry.",
   "Operasi file belum didukung. Periksa jenis file dan batas dukungan aplikasi.": "This file operation is not supported yet. Check the file type and application limits.",
-  "Operasi gagal. Periksa status file dan diagnostik layanan; aplikasi akan mencoba lagi.": "Operation failed. Check file status and service diagnostics; the application will retry."
+  "Operasi gagal. Periksa status file dan diagnostik layanan; aplikasi akan mencoba lagi.": "Operation failed. Check file status and service diagnostics; the application will retry.",
+  "Update installed. Finishing synchronization before restarting automatically…": "Update installed. Finishing synchronization before restarting automatically…",
+  "Restart now": "Restart now",
+  "Automatic restart could not be completed. Choose Restart now to retry.": "Automatic restart could not be completed. Choose Restart now to retry.",
+  "Interface language": "Interface language",
+  "Choose a language, then apply. The window reopens automatically; synchronization continues.": "Choose a language, then apply. The window reopens automatically; synchronization continues.",
+  "System default": "System default",
+  "Apply language": "Apply language",
+  "Language settings could not be saved. Check configuration folder permissions.": "Language settings could not be saved. Check configuration folder permissions.",
+  "Saving language preference…": "Saving language preference…",
+  "Language saved. Reopening the application…": "Language saved. Reopening the application…",
+  "_language_name": "English",
+  "Reload languages": "Reload languages",
+  "Loading language files…": "Loading language files…",
+  "Language files could not be read. Try Reload languages.": "Language files could not be read. Try Reload languages.",
+  "Language saved. Reopen the application to use it.": "Language saved. Reopen the application to use it."
 }

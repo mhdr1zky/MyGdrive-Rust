@@ -63,6 +63,7 @@ impl Model {
 pub enum Event {
     Show,
     Progress,
+    ProgressAt { x: i32, y: i32 },
     OpenFolder,
     Control(Command),
     Quit,
@@ -96,8 +97,8 @@ impl Tray for Item {
     fn status(&self) -> ksni::Status {
         ksni::Status::Active
     }
-    fn activate(&mut self, _x: i32, _y: i32) {
-        let _ = self.events.try_send(Event::Progress);
+    fn activate(&mut self, x: i32, y: i32) {
+        let _ = self.events.try_send(Event::ProgressAt { x, y });
     }
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         let badge = if self.model.attention {
@@ -393,6 +394,11 @@ mod tests {
         };
         (show.activate)(&mut item);
         assert!(matches!(rx.try_recv().unwrap(), Event::Show));
+        item.activate(1820, 24);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Event::ProgressAt { x: 1820, y: 24 }
+        ));
         assert_eq!(item.icon_pixmap()[0].data.len(), 32 * 32 * 4);
     }
 }

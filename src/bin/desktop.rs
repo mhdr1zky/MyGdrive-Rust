@@ -12,19 +12,31 @@ use std::{
 };
 #[path = "desktop/offline.rs"]
 mod offline;
+#[path = "desktop/position.rs"]
+mod position;
 #[path = "desktop/progress.rs"]
 mod progress;
+#[path = "desktop/restart.rs"]
+mod restart;
+#[path = "desktop/settings.rs"]
+mod settings;
 #[path = "desktop/setup.rs"]
 mod setup;
 #[path = "desktop/updater.rs"]
 mod updater;
 
+#[derive(Default)]
+struct RestartRequest {
+    update: bool,
+    language: Option<String>,
+}
+
 #[derive(Parser)]
 #[command(about = "MyGdrive Rust desktop dashboard")]
 struct Args {
     /// Interface language: auto (system), en, id, zh, or a custom catalog code.
-    #[arg(long, env = "MYGDRIVE_LANGUAGE", default_value = "auto")]
-    language: String,
+    #[arg(long, env = "MYGDRIVE_LANGUAGE")]
+    language: Option<String>,
     #[arg(long)]
     state: Option<PathBuf>,
     /// Render the application window to PNG and exit, for visual verification.
@@ -293,6 +305,7 @@ fn build(
     dialogs: (bool, bool, bool),
     background: bool,
     start_service: bool,
+    language: String,
 ) {
     if let Some(window) = app
         .active_window()
@@ -312,6 +325,7 @@ fn build(
         Some(p) => p,
         None => return,
     };
+    let relaunch = restart::Launcher::capture(&tray_state, &binary).ok();
     let controller = match dashboard::spawn_observer(state, binary, !snapshot_mode) {
         Ok(c) => Rc::new(c),
         Err(_) => return,
@@ -402,7 +416,24 @@ fn build(
     }
     status_card.append(&buttons);
     content.append(&status_card);
-    content.append(&updater::panel(snapshot_mode));
+    let restart_request = Rc::new(RefCell::new(RestartRequest::default()));
+    let updating = Rc::new(Cell::new(false));
+    let request_update = restart_request.clone();
+    content.append(&updater::panel(
+        snapshot_mode,
+        updating.clone(),
+        move || {
+            request_update.borrow_mut().update = true;
+        },
+    ));
+    let request_language = restart_request.clone();
+    content.append(&settings::panel(
+        &language,
+        snapshot_mode,
+        move |language| {
+            request_language.borrow_mut().language = Some(language);
+        },
+    ));
     let folder_card = card();
     folder_card.append(&label(tr("FOLDER TERHUBUNG"), "eyebrow"));
     let profile = label(tr("Google Drive"), "detail");
@@ -524,9 +555,9 @@ fn build(
     let progress = Rc::new(progress::Popup::new(&window, snapshot_mode));
     let progress_action = gio::SimpleAction::new_stateful("progress", None, &false.to_variant());
     let popup_button = progress.clone();
-    activity_button.connect_clicked(move |_| popup_button.window.present());
+    activity_button.connect_clicked(move |_| popup_button.present(None));
     let popup = progress.clone();
-    progress_action.connect_activate(move |_, _| popup.window.present());
+    progress_action.connect_activate(move |_, _| popup.present(None));
     let action_state = progress_action.clone();
     progress.window.connect_visible_notify(move |window| {
         action_state.set_state(&window.is_visible().to_variant())
@@ -666,6 +697,10 @@ fn build(
             }
         });
     }
+    let restart_in_progress = Rc::new(Cell::new(false));
+    let restart_for_close = restart_in_progress.clone();
+    let mut restart_plan = None::<restart::Plan>;
+    let mut desired_language = language;
     let controller_for_close = controller.clone();
     let tray_for_close = tray.clone();
     let tray_ready_for_close = tray_ready.clone();
@@ -673,6 +708,7 @@ fn build(
     let weak = window.downgrade();
     let mut history = VecDeque::<String>::new();
     let progress_render = progress.window.clone();
+    let progress_for_open = progress.clone();
     let mut last_cycle = None;
     let mut queued_files = 0;
     let mut background_pending =
@@ -711,9 +747,8 @@ fn build(
                         background_pending = false;
                         window.present();
                     }
-                    Ok(tray::Event::Progress) => {
-                        progress.window.present();
-                    }
+                    Ok(tray::Event::Progress) => progress.present(None),
+                    Ok(tray::Event::ProgressAt { x, y }) => progress.present(Some((x, y))),
                     Ok(tray::Event::OpenFolder) => widgets.open.emit_clicked(),
                     Ok(tray::Event::Quit) => quit_requested.set(true),
                     Ok(tray::Event::Control(command)) => {
@@ -731,6 +766,61 @@ fn build(
             background_pending = false;
             window.present();
             feedback.set_text(tr("Tray belum tersedia. Dashboard tetap terbuka."));
+        }
+        if quit_requested.get() {
+            *restart_request.borrow_mut() = RestartRequest::default();
+            restart_plan = None;
+        }
+        if !busy.get() && !updating.get() {
+            let mut request = restart_request.borrow_mut();
+            if request.update || request.language.is_some() {
+                if let Some(selected) = request.language.take() {
+                    desired_language = selected;
+                }
+                let update = std::mem::take(&mut request.update);
+                let prepared = relaunch.as_ref().ok_or(()).and_then(|launcher| {
+                    launcher
+                        .plan(
+                            &desired_language,
+                            !window.is_visible(),
+                            progress.window.is_visible(),
+                        )
+                        .map_err(|_| ())
+                });
+                match prepared {
+                    Ok(plan) if update => {
+                        if controller
+                            .commands
+                            .try_send(Command::RestartAfterUpdate)
+                            .is_ok()
+                        {
+                            restart_plan = Some(plan);
+                            restart_in_progress.set(true);
+                            busy.set(true);
+                            feedback.set_text(tr("Update installed. Finishing synchronization before restarting automatically…"));
+                            widgets.render(&current.borrow(), true);
+                        } else {
+                            feedback.set_text(tr("Automatic restart could not be completed. Choose Restart now to retry."));
+                        }
+                    }
+                    Ok(plan) => {
+                        if plan.spawn_after_exit().is_ok() {
+                            controller.stop();
+                            if let Some(tray) = &tray {
+                                tray.stop();
+                            }
+                            app_for_events.quit();
+                            return glib::ControlFlow::Break;
+                        }
+                        feedback.set_text(tr("Language saved. Reopen the application to use it."));
+                    }
+                    Err(()) => feedback.set_text(if update {
+                        tr("Automatic restart could not be completed. Choose Restart now to retry.")
+                    } else {
+                        tr("Language saved. Reopen the application to use it.")
+                    }),
+                }
+            }
         }
         if quit_requested.get()
             && !busy.get()
@@ -794,6 +884,13 @@ fn build(
                     progress.update(&items, &current.borrow());
                 }
                 Ok(Event::Completed(result)) => {
+                    if restart_plan.take().is_some() {
+                        restart_in_progress.set(false);
+                        feedback.set_text(tr("Automatic restart could not be completed. Choose Restart now to retry."));
+                        busy.set(false);
+                        widgets.render(&current.borrow(), false);
+                        continue;
+                    }
                     busy.set(false);
                     feedback.set_text(match &result {
                         Ok(message) => message,
@@ -814,6 +911,28 @@ fn build(
                         }
                     }
                     updating_autostart.set(false);
+                }
+                Ok(Event::RestartReady { start_service }) => {
+                    if let Some(mut plan) = restart_plan.take() {
+                        plan.start_service = start_service;
+                        if plan.spawn_after_exit().is_err() {
+                            restart_in_progress.set(false);
+                            busy.set(false);
+                            feedback.set_text(tr("Automatic restart could not be completed. Choose Restart now to retry."));
+                            // Restore the service if preparing the relaunch helper failed after drain.
+                            if start_service && controller.commands.try_send(Command::Start).is_ok()
+                            {
+                                busy.set(true);
+                            }
+                            continue;
+                        }
+                    }
+                    controller.stop();
+                    if let Some(tray) = &tray {
+                        tray.stop();
+                    }
+                    app_for_events.quit();
+                    return glib::ControlFlow::Break;
                 }
                 Ok(Event::ExitReady) => {
                     controller.stop();
@@ -846,7 +965,7 @@ fn build(
         window.present();
     }
     let render_window: gtk::Window = if show_progress {
-        progress_render.present();
+        progress_for_open.present(None);
         progress_render
     } else if show_offline {
         offline::show(&window, setup_state, snapshot_mode)
@@ -877,6 +996,9 @@ fn build(
     }
     let close_controller = controller_for_close;
     window.connect_close_request(move |window| {
+        if restart_for_close.get() {
+            return glib::Propagation::Stop;
+        }
         if tray_ready_for_close.get() {
             window.set_visible(false);
             return glib::Propagation::Stop;
@@ -890,7 +1012,15 @@ fn build(
 }
 fn main() -> glib::ExitCode {
     let args = Args::parse();
-    mygdrive_sync::i18n::initialize(Some(&args.language));
+    let language = args
+        .language
+        .clone()
+        .or_else(|| {
+            mygdrive_sync::preferences::directory()
+                .and_then(|path| mygdrive_sync::preferences::language(&path).ok().flatten())
+        })
+        .unwrap_or_else(|| "auto".into());
+    mygdrive_sync::i18n::initialize(Some(&language));
     let state = args.state.unwrap_or_else(|| {
         directories::BaseDirs::new()
             .expect("user data directory")
@@ -926,6 +1056,7 @@ fn main() -> glib::ExitCode {
             (args.setup, args.offline, args.progress),
             args.background,
             args.start_service,
+            language.clone(),
         )
     });
     app.run_with_args(&["mygdrive-desktop"])

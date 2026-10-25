@@ -271,5 +271,20 @@
   "Drive membatasi permintaan. Tunggu percobaan ulang otomatis.": "Drive membatasi permintaan. Tunggu percobaan ulang otomatis.",
   "File lokal belum dapat dibaca atau ditulis. Periksa ruang disk dan izin folder; aplikasi akan mencoba lagi.": "File lokal belum dapat dibaca atau ditulis. Periksa ruang disk dan izin folder; aplikasi akan mencoba lagi.",
   "Operasi file belum didukung. Periksa jenis file dan batas dukungan aplikasi.": "Operasi file belum didukung. Periksa jenis file dan batas dukungan aplikasi.",
-  "Operasi gagal. Periksa status file dan diagnostik layanan; aplikasi akan mencoba lagi.": "Operasi gagal. Periksa status file dan diagnostik layanan; aplikasi akan mencoba lagi."
+  "Operasi gagal. Periksa status file dan diagnostik layanan; aplikasi akan mencoba lagi.": "Operasi gagal. Periksa status file dan diagnostik layanan; aplikasi akan mencoba lagi.",
+  "Update installed. Finishing synchronization before restarting automatically…": "Pembaruan terpasang. Menyelesaikan sinkronisasi sebelum memulai ulang otomatis…",
+  "Restart now": "Mulai ulang sekarang",
+  "Automatic restart could not be completed. Choose Restart now to retry.": "Mulai ulang otomatis belum berhasil. Pilih Mulai ulang sekarang untuk mencoba lagi.",
+  "Interface language": "Bahasa antarmuka",
+  "Choose a language, then apply. The window reopens automatically; synchronization continues.": "Pilih bahasa lalu terapkan. Jendela dibuka ulang otomatis; sinkronisasi tetap berjalan.",
+  "System default": "Sesuai sistem",
+  "Apply language": "Terapkan bahasa",
+  "Language settings could not be saved. Check configuration folder permissions.": "Pengaturan bahasa belum dapat disimpan. Periksa izin folder konfigurasi.",
+  "Saving language preference…": "Menyimpan pilihan bahasa…",
+  "Language saved. Reopening the application…": "Bahasa tersimpan. Membuka ulang aplikasi…",
+  "_language_name": "Indonesia",
+  "Reload languages": "Muat ulang bahasa",
+  "Loading language files…": "Memuat file bahasa…",
+  "Language files could not be read. Try Reload languages.": "File bahasa belum dapat dibaca. Coba Muat ulang bahasa.",
+  "Language saved. Reopen the application to use it.": "Bahasa tersimpan. Buka ulang aplikasi untuk menerapkannya."
 }

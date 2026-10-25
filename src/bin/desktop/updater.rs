@@ -1,7 +1,7 @@
 use gtk::{glib, prelude::*};
 use mygdrive_sync::i18n::{fmt, tr};
 use sha2::{Digest, Sha256};
-use std::{path::PathBuf, process::Command, sync::mpsc, time::Duration};
+use std::{cell::Cell, path::PathBuf, process::Command, rc::Rc, sync::mpsc, time::Duration};
 
 const RELEASES: &str = "https://github.com/mhdr1zky/MyGdrive-Rust/releases/latest";
 
@@ -39,7 +39,7 @@ fn status_message(status: &serde_json::Value) -> String {
         Some("downloading") => "Downloading update {0}…",
         Some("installing") => "Installing update {0}…",
         Some("installed") => {
-            "Update installed. Reopen the application and service to use the new version."
+            "Update installed. Finishing synchronization before restarting automatically…"
         }
         Some("error") => "Update failed. Check the connection and permissions, then retry.",
         _ => "Status pembaruan belum tersedia.",
@@ -47,9 +47,46 @@ fn status_message(status: &serde_json::Value) -> String {
     fmt(key, &[("0", version.to_owned())])
 }
 
+fn version(value: &str) -> Option<[u64; 3]> {
+    let parts: Vec<_> = value.trim_start_matches('v').split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    Some([
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+    ])
+}
+fn restart_ready(
+    kind: &str,
+    status: &serde_json::Map<String, serde_json::Value>,
+    succeeded: bool,
+) -> bool {
+    if !succeeded
+        || !matches!(kind, "deb" | "appimage")
+        || status.get("phase").and_then(|v| v.as_str()) != Some("installed")
+    {
+        return false;
+    }
+    let running = version(env!("CARGO_PKG_VERSION")).expect("package semantic version");
+    ["installed_version", "current_version"].iter().any(|key| {
+        status
+            .get(*key)
+            .and_then(|v| v.as_str())
+            .and_then(version)
+            .is_some_and(|v| v > running)
+    })
+}
+
 /// Network, status files and package operations run outside the GTK main thread.
 /// The periodic path can only check; installation requires a button request.
-pub fn panel(snapshot_mode: bool) -> gtk::Box {
+pub fn panel(
+    snapshot_mode: bool,
+    updating: Rc<Cell<bool>>,
+    restart: impl Fn() + 'static,
+) -> gtk::Box {
+    let restart = Rc::new(restart);
     let panel = super::card();
     panel.append(&super::label(tr("APLIKASI"), "eyebrow"));
     panel.append(&super::label(
@@ -63,6 +100,14 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
     let install = gtk::Button::with_label(tr("Update sekarang"));
     install.add_css_class("suggested-action");
     install.set_visible(false);
+    let restart_button = gtk::Button::with_label(tr("Restart now"));
+    restart_button.set_visible(false);
+    let retry_restart = restart.clone();
+    restart_button.connect_clicked(move |_| retry_restart());
+    actions.insert(&restart_button, -1);
+    if let Some(child) = restart_button.parent() {
+        child.set_visible(false);
+    }
     let release = gtk::LinkButton::with_label(RELEASES, tr("Catatan rilis ↗"));
     actions.insert(&check, -1);
     actions.insert(&install, -1);
@@ -106,6 +151,7 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
     let (requests, receiver) = mpsc::sync_channel(1);
     let (events, results) = mpsc::channel::<serde_json::Value>();
     check.set_sensitive(false);
+    updating.set(true);
     let worker = std::thread::Builder::new()
         .name("github-updater".into())
         .spawn(move || {
@@ -130,10 +176,12 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
                 }
                 let mut failed = None;
                 let mut reported = false;
+                let mut succeeded = false;
                 match command.spawn() {
                     Ok(mut child) => loop {
                         let done = match child.try_wait() {
                             Ok(Some(status)) => {
+                                succeeded = status.success();
                                 if !status.success() {
                                     failed = Some(tr("Pemeriksaan gagal. Pastikan Python 3 tersedia."));
                                 }
@@ -150,6 +198,8 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
                             {
                                 reported = true;
                                 status.insert("busy".into(), (!done).into());
+                                let ready = restart_ready(kind, &status, done && succeeded);
+                                status.insert("restart_ready".into(), ready.into());
                                 if events.send(serde_json::Value::Object(status)).is_err() {
                                     return;
                                 }
@@ -183,6 +233,7 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
             }
         });
     if worker.is_err() {
+        updating.set(false);
         message.set_text(tr(
             "Worker pembaruan tidak dapat dimulai. Buka ulang aplikasi.",
         ));
@@ -193,8 +244,10 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
     let pending_check = check.clone();
     let pending_install = install.clone();
     let feedback = message.clone();
+    let checking = updating.clone();
     check.connect_clicked(move |_| {
         if commands.try_send(Request::Check).is_ok() {
+            checking.set(true);
             pending_check.set_sensitive(false);
             pending_install.set_sensitive(false);
             feedback.set_text(tr("Memeriksa rilis GitHub…"));
@@ -205,6 +258,7 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
     let version = selected.clone();
     let pending_check = check.clone();
     let feedback = message.clone();
+    let installing = updating.clone();
     install.connect_clicked(move |button| {
         if manual_action.get() {
             super::launch_uri(RELEASES, &feedback);
@@ -212,12 +266,14 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
         }
         if let Some(version) = version.borrow().as_ref() {
             if requests.try_send(Request::Install(version.clone())).is_ok() {
+                installing.set(true);
                 button.set_sensitive(false);
                 pending_check.set_sensitive(false);
                 feedback.set_text(tr("Menyiapkan pembaruan yang Anda pilih…"));
             }
         }
     });
+    let automatically_restarted = Cell::new(false);
     let weak = panel.downgrade();
     glib::timeout_add_local(Duration::from_millis(250), move || {
         if weak.upgrade().is_none() {
@@ -233,6 +289,15 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
             }
             message.set_tooltip_text(status["message"].as_str());
             let busy = status["busy"].as_bool().unwrap_or(false);
+            updating.set(busy);
+            let ready = status["restart_ready"].as_bool().unwrap_or(false);
+            restart_button.set_visible(ready);
+            if let Some(child) = restart_button.parent() {
+                child.set_visible(ready);
+            }
+            if ready && !automatically_restarted.replace(true) {
+                restart();
+            }
             let is_manual = status["phase"] == "manual";
             manual.set(is_manual);
             install.set_tooltip_text(Some(if is_manual { tr("Buka rilis GitHub untuk memilih paket instalasi.") } else { tr("Unduh, verifikasi, lalu pasang versi yang tersedia. Paket .deb meminta izin administrator.") }));
@@ -251,4 +316,42 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
         glib::ControlFlow::Continue
     });
     panel
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn restarts_only_after_confirmed_newer_packaged_installation() {
+        let mut status = serde_json::json!({"phase":"installed", "installed_version":"999.0.0"})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(restart_ready("deb", &status, true));
+        assert!(restart_ready("appimage", &status, true));
+        assert!(!restart_ready("source", &status, true));
+        assert!(!restart_ready("deb", &status, false));
+        for phase in [
+            "checking",
+            "available",
+            "downloading",
+            "installing",
+            "error",
+        ] {
+            status.insert("phase".into(), phase.into());
+            assert!(!restart_ready("deb", &status, true));
+        }
+        status.insert("phase".into(), "installed".into());
+        for value in [
+            env!("CARGO_PKG_VERSION"),
+            "0.0.1",
+            "invalid",
+            "999.0.0-beta",
+        ] {
+            status.insert("installed_version".into(), value.into());
+            assert!(!restart_ready("deb", &status, true));
+        }
+        status.insert("current_version".into(), "999.0.0".into());
+        assert!(restart_ready("deb", &status, true));
+    }
 }

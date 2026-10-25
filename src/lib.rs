@@ -24,6 +24,7 @@ pub mod oauth;
 pub mod offline;
 pub mod offline_controller;
 pub mod onboarding;
+pub mod preferences;
 pub mod reconcile;
 pub mod scope_migration;
 pub mod service;

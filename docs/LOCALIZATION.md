@@ -8,7 +8,9 @@ The default is automatic system-language detection. POSIX locale priority is `LC
 
 Locale codes are normalized: `en_US.UTF-8` → `en`, `id_ID` → `id`, and `zh-CN`/`zh_Hans_CN` → `zh`. The bundled Chinese catalog uses Simplified Chinese. Unsupported languages fall back to English.
 
-Use `--language en|id|zh|auto` or `MYGDRIVE_LANGUAGE`. The CLI option takes precedence over the environment. A newly opened profile inherits an explicitly selected interface language. Quit a running profile before reopening it in another language; GTK normally reuses that profile's existing process.
+The dashboard includes an **Interface language** card. **System default** is always available; other choices are discovered from valid JSON catalogs in the same directories used for translations. Bundled choices are English, Indonesia, and 简体中文. **Reload languages** rescans the files while the dashboard stays open. Removed custom files disappear from the refreshed list. Duplicate codes are merged in override-directory order. **Apply language** saves the choice in `$XDG_CONFIG_HOME/mygdrive/desktop-settings.json`, then automatically closes/reopens the desktop window without stopping the sync service. The default configuration directory is `~/.config`. Invalid settings do not block startup; malformed or symlinked settings files are not overwritten.
+
+Selection priority is `--language` → `MYGDRIVE_LANGUAGE` → saved dashboard choice → `auto`. An explicit `--language auto` overrides an environment preference. Relaunching preserves the current profile and the selected mode, including automatic system detection. Opening a profile already running through an external CLI command still reuses that existing process.
 
 ## Catalogs and search order
 
@@ -43,6 +45,24 @@ Malformed JSON files are ignored with a diagnostic. Empty translations or mismat
 
 Add the same message key to all bundled catalogs and call `tr("key")` for plain text, or `fmt("key", &[("0", value.to_string())])` for runtime values. Do not translate action IDs, MIME types, API payloads, database states, paths, or CSS classes.
 
-To add an external language, copy `en.json` to a two- or three-letter language file such as `fr.json`, translate its values, and place it in an override directory. Select it using the CLI or environment. To bundle a language by default, also register its embedded catalog in `src/i18n.rs`.
+To add a language without changing/rebuilding the application, copy `en.json` to a lowercase two- or three-letter file such as `fr.json`, translate its values, and set `"_language_name": "Français"` for its dashboard label. Place it in an override directory, choose **Reload languages**, select **Français**, then **Apply language**. Without `_language_name`, a custom language displays its filename code. Malformed/non-string JSON catalogs and noncanonical filenames are skipped; missing translations still use English. The saved preference supports custom codes as well as bundled languages. CLI/environment selection remains available. To bundle a language by default, also register its embedded catalog in `src/i18n.rs`.
 
 The Debian and AppImage build scripts package `assets/locales/*.json`. Tests verify locale precedence, catalog key/placeholder consistency, custom overrides, malformed files, English fallback, and safe argument reordering.
+
+### Minimal additional language file
+
+Save this UTF-8 file as `~/.config/mygdrive/locales/fr.json`, then reload the dashboard language list:
+
+```json
+{
+  "_language_name": "Français",
+  "Jeda": "Pause",
+  "Lanjutkan": "Reprendre",
+  "Interface language": "Langue de l’interface",
+  "System default": "Langue du système",
+  "Apply language": "Appliquer la langue",
+  "Reload languages": "Recharger les langues"
+}
+```
+
+A partial catalog is valid; untranslated messages fall back to English. `_language_name` is metadata, not an interface message ID. Selecting the new file reopens the UI to load its translations while the service continues running. Changes to existing message values load on the next reopen; **Reload languages** refreshes the list and display names.

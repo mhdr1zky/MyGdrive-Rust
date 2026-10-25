@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.6 — 26 October 2026
+
+- Restart the desktop automatically after a verified packaged update. Drain active synchronization first, restore the previously running service and its paused state, and preserve profile, language, and window visibility. A detached helper waits for the old instance to exit before opening the new launcher; AppImage relaunch clears old mount-specific loader settings. Failed restarts remain retryable through **Restart now**.
+- Add a dynamic **Interface language** dashboard setting. Discover languages from JSON files, with **System default** always available and English, Indonesia, and Simplified Chinese bundled. **Reload languages** rescans added/removed files; optional `_language_name` metadata supplies their display names. Save the selection per user and reopen the desktop automatically without interrupting synchronization.
+- Open left-click tray activity along the right edge of the clicked monitor on X11/Xfce, respecting desktop panels, monitor coordinates, and scaling. Wayland keeps compositor-controlled placement.
+- Upgrading from v1.0.5 or earlier still requires one manual reopen because the old updater does not contain the new restart behavior. Existing FUSE mounts remain active to protect open files.
+
 ## v1.0.5 — 25 October 2026
 
 - Add file-based interface localization with English, Indonesian, and Simplified Chinese catalogs. The default follows the system locale, with English fallback. Support `--language`, `MYGDRIVE_LANGUAGE`, and external JSON overrides without recompilation.

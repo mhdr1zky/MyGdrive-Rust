@@ -26,7 +26,7 @@ impl Popup {
     pub fn new(parent: &gtk::ApplicationWindow, snapshot_mode: bool) -> Self {
         let window = gtk::Window::builder()
             .title(tr("Aktivitas sinkronisasi · MyGdrive Rust"))
-            .default_width(560)
+            .default_width(440)
             .default_height(580)
             .resizable(true)
             .hide_on_close(true)
@@ -90,6 +90,12 @@ impl Popup {
             pending_count: Cell::new(0),
             retry_count: Cell::new(0),
             delete_count: Cell::new(0),
+        }
+    }
+    pub fn present(&self, anchor: Option<(i32, i32)>) {
+        self.window.present();
+        if !self.snapshot_mode {
+            super::position::on_right(&self.window, anchor);
         }
     }
     /// Update service health even when the database activity list cannot be read.

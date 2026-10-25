@@ -2,7 +2,7 @@
 
 Google Drive synchronization for Linux, written in Rust. Browse My Drive from the desktop and file manager, download content when needed, and select files or folders to keep available offline.
 
-**Latest release: [v1.0.5](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.5)** — amd64 `.deb` packages for Ubuntu 24.04/Linux Mint 22 and x86_64 AppImage. This is an independent project and is not affiliated with Google.
+**Latest release: [v1.0.6](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.6)** — amd64 `.deb` packages for Ubuntu 24.04/Linux Mint 22 and x86_64 AppImage. This is an independent project and is not affiliated with Google.
 
 The dashboard displays the running version and checks GitHub releases periodically. Package downloads and installation require **Update now** and SHA-256 verification. See the [changelog](CHANGELOG.md).
 
@@ -23,7 +23,7 @@ Screenshots use example profiles and files on Linux. The Thunar virtual drive co
 - Recursive offline selections, including future children, with independent file/subfolder pins.
 - Office owner files (`~$…`), LibreOffice locks (`.~lock.…#`), and known Word scratch patterns do not enter new sync queues. Temporary-file-and-rename saves remain supported.
 - Preserve-both content conflicts; some recovery cases wait for review before uploading.
-- Dashboard, tray, queue, activity history, pause/resume, and manual sync. Notifications do not automatically open the activity window; **View details** opens it.
+- Dashboard, tray, queue, activity history, pause/resume, and manual sync. On X11/Xfce, left-clicking the tray opens activity at the right edge of the clicked monitor, inside its usable work area. Wayland uses compositor-controlled placement. Notifications do not automatically open the activity window; **View details** opens it.
 - Separate account/Drive-folder/local-folder profiles with independent state.
 - Linux FUSE mount, Thunar context actions and folder badges, and optional autostart per profile.
 - Persistent SQLite WAL queues, content checksums, restart recovery, and cache cleanup that protects offline files and local changes.
@@ -31,6 +31,8 @@ Screenshots use example profiles and files on Linux. The Thunar virtual drive co
 - File-based English, Indonesian, and Simplified Chinese interface translations, selected from the system locale by default.
 
 ## Interface language
+
+Open **Interface language** on the dashboard, choose **System default** or a language discovered from the JSON catalogs (bundled: **English**, **Indonesia**, **简体中文**), then choose **Apply language**. Use **Reload languages** after adding another language file; no application rebuild is needed. The selection is saved for future launches and the window reopens automatically while the service keeps syncing. CLI/environment overrides take precedence over the saved preference.
 
 The default is `auto`. Locale precedence is `LC_ALL`, `LC_MESSAGES`, then `LANG`; GNU `LANGUAGE` preferences are honored outside the C/POSIX locale. Regional variants such as `en_US.UTF-8`, `id_ID`, and `zh-CN` resolve to `en`, `id`, and `zh`. Unsupported languages fall back to English.
 
@@ -56,14 +58,14 @@ Translations live in [`assets/locales/`](assets/locales/): `en.json`, `id.json`,
 
 ## Run the AppImage
 
-Download `mygdrive-rust_1.0.5_x86_64.AppImage` from [release v1.0.5](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.5):
+Download `mygdrive-rust_1.0.6_x86_64.AppImage` from [release v1.0.6](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.6):
 
 ```bash
-chmod +x mygdrive-rust_1.0.5_x86_64.AppImage
-./mygdrive-rust_1.0.5_x86_64.AppImage
+chmod +x mygdrive-rust_1.0.6_x86_64.AppImage
+./mygdrive-rust_1.0.6_x86_64.AppImage
 # CLI and virtual drive helper:
-./mygdrive-rust_1.0.5_x86_64.AppImage --sync --help
-./mygdrive-rust_1.0.5_x86_64.AppImage --mount --help
+./mygdrive-rust_1.0.6_x86_64.AppImage --sync --help
+./mygdrive-rust_1.0.6_x86_64.AppImage --mount --help
 ```
 
 The x86_64 AppImage targets Ubuntu 24.04/Linux Mint 22 or systems with glibc 2.39+. GTK libraries are bundled; graphics drivers, fonts, browser, and desktop services come from the host. It is not a sandbox. State and tokens use the native location (`~/.local/share/mygdrive/`); do not run `.deb` and AppImage processes against the same profile simultaneously.
@@ -74,16 +76,16 @@ Keep the AppImage at a fixed location before enabling **Start at login**. **Upda
 
 ## Install the Debian package
 
-Download `mygdrive-rust_1.0.5_amd64.deb` from the repository's Releases page:
+Download `mygdrive-rust_1.0.6_amd64.deb` from the repository's Releases page:
 
 ```bash
-sudo apt install ./mygdrive-rust_1.0.5_amd64.deb
+sudo apt install ./mygdrive-rust_1.0.6_amd64.deb
 /usr/bin/mygdrive-desktop
 ```
 
 `apt` installs runtime dependencies. Rust and a compiler are not required to run the package. Version 1 targets amd64 Linux; ARM, Windows, macOS, and Debian 12 are not package targets.
 
-When upgrading from v1.0.0–v1.0.4, use **Quit** to drain active operations before installing. Local folders, accounts, and offline selections are retained. Upgrading v1.0.0 migrates schema 3 to 4; v1.0.0 cannot read migrated state. Version 1.0.1 already uses schema 4. Keep a state backup if a downgrade may be necessary.
+When upgrading from v1.0.0–v1.0.5, use **Quit** to drain active operations before installing. Local folders, accounts, and offline selections are retained. Upgrading v1.0.0 migrates schema 3 to 4; v1.0.0 cannot read migrated state. Version 1.0.1 already uses schema 4. Keep a state backup if a downgrade may be necessary.
 
 An older source launcher at `~/.local/share/applications/io.mygdrive.Desktop.desktop` can take precedence over the package launcher. Archive that entry to use the package from the application menu. `/usr/bin/mygdrive-desktop` always opens the packaged version. Adjust paths if `$XDG_DATA_HOME` is set.
 
@@ -101,7 +103,8 @@ The **Application** card shows the running version, check/download/install statu
 
 - AppImage updates require host `python3` and write access to the AppImage and its directory. Staging uses the same filesystem, verifies the release's `SHA256SUMS`, and atomically replaces the original. Interrupted or invalid downloads leave the old file intact.
 - `.deb` updates verify the checksum, package name, version, and architecture. `pkexec` requests administrator authentication and runs `apt-get --yes --no-remove install` on the verified package. Passwords are not stored. Authentication rejection or installation failure is reported; a later installation still requires a new user action. `install.log` is stored beside the updater status file.
-- Reopen the application and profile service to use the new version. The updater does not forcibly stop active sync or restart services. Profiles share a lock per installation location.
+- After a verified installation, the application drains the current profile service, closes the old desktop, and opens the updated launcher automatically. A previously running service starts again with its saved pause state; a stopped service stays stopped. The profile, language, and window visibility are retained. If drain/relaunch cannot be confirmed, the dashboard reports the problem and **Restart now** can retry. Active FUSE mounts are retained to protect open editor handles; remount later to replace that helper. Profiles share an update lock per installation location.
+- Automatic restart is implemented in v1.0.6. When upgrading from v1.0.5 or earlier, reopen once manually; later updates can restart automatically.
 
 Version 1.0.2 and earlier require a one-time manual upgrade to a package containing the updater. Source/development builds check versions but open the release page for manual installation. Standalone CLI and mount processes do not check for updates.
 
@@ -177,7 +180,7 @@ Login uses the system browser, PKCE, state validation, and a loopback callback. 
 
 The `drive` scope allows reading and managing accessible Drive files. Choosing a subfolder limits application behavior, not OAuth permissions. `drive-file` is narrower and does not automatically cover existing files; Google Picker is not integrated. See [Google's scope documentation](https://developers.google.com/workspace/drive/api/guides/api-specific-auth).
 
-## Version 1.0.5 limits
+## Version 1.0.6 limits
 
 - My Drive and ordinary Office, PDF, image, text, and archive files are supported. Native Google Docs/Sheets/Slides content sync and round trips are not.
 - Shared Drives and a complete Shared with me view are unavailable.

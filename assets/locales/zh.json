@@ -271,5 +271,20 @@
   "Drive membatasi permintaan. Tunggu percobaan ulang otomatis.": "云端硬盘正在限制请求。请等待自动重试。",
   "File lokal belum dapat dibaca atau ditulis. Periksa ruang disk dan izin folder; aplikasi akan mencoba lagi.": "暂时无法读写本地文件。请检查磁盘空间和文件夹权限；应用将重试。",
   "Operasi file belum didukung. Periksa jenis file dan batas dukungan aplikasi.": "暂不支持此文件操作。请检查文件类型和应用支持范围。",
-  "Operasi gagal. Periksa status file dan diagnostik layanan; aplikasi akan mencoba lagi.": "操作失败。请检查文件状态和服务诊断；应用将重试。"
+  "Operasi gagal. Periksa status file dan diagnostik layanan; aplikasi akan mencoba lagi.": "操作失败。请检查文件状态和服务诊断；应用将重试。",
+  "Update installed. Finishing synchronization before restarting automatically…": "更新已安装。正在完成同步，随后自动重启…",
+  "Restart now": "立即重启",
+  "Automatic restart could not be completed. Choose Restart now to retry.": "无法完成自动重启。请选择“立即重启”重试。",
+  "Interface language": "界面语言",
+  "Choose a language, then apply. The window reopens automatically; synchronization continues.": "选择语言后点击应用。窗口将自动重新打开；同步会继续。",
+  "System default": "跟随系统",
+  "Apply language": "应用语言",
+  "Language settings could not be saved. Check configuration folder permissions.": "无法保存语言设置。请检查配置文件夹权限。",
+  "Saving language preference…": "正在保存语言设置…",
+  "Language saved. Reopening the application…": "语言已保存。正在重新打开应用…",
+  "_language_name": "简体中文",
+  "Reload languages": "重新加载语言",
+  "Loading language files…": "正在加载语言文件…",
+  "Language files could not be read. Try Reload languages.": "无法读取语言文件。请尝试重新加载语言。",
+  "Language saved. Reopen the application to use it.": "语言已保存。请重新打开应用以应用此设置。"
 }

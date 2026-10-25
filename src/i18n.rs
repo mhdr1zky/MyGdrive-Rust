@@ -71,6 +71,66 @@ fn catalog_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// A language file discovered at runtime. The filename is its canonical code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Language {
+    pub code: String,
+    pub name: String,
+}
+fn language_name(code: &str, entries: &BTreeMap<String, String>) -> String {
+    entries
+        .get("_language_name")
+        .filter(|name| !name.trim().is_empty())
+        .map(|name| name.trim().chars().take(80).collect())
+        .unwrap_or_else(|| code.to_owned())
+}
+fn available_in(dirs: &[PathBuf]) -> Vec<Language> {
+    let mut languages = BTreeMap::new();
+    for (code, text) in [("en", ENGLISH), ("id", INDONESIAN), ("zh", CHINESE)] {
+        let entries =
+            serde_json::from_str::<BTreeMap<String, String>>(text).expect("bundled catalog");
+        languages.insert(code.to_owned(), language_name(code, &entries));
+    }
+    for directory in dirs {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let Some(code) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if language_code(code).as_deref() != Some(code) {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(entries) = serde_json::from_str::<BTreeMap<String, String>>(&text) {
+                    let name = if entries.contains_key("_language_name")
+                        || !languages.contains_key(code)
+                    {
+                        language_name(code, &entries)
+                    } else {
+                        languages[code].clone()
+                    };
+                    languages.insert(code.to_owned(), name);
+                }
+            }
+        }
+    }
+    languages
+        .into_iter()
+        .map(|(code, name)| Language { code, name })
+        .collect()
+}
+/// Rescan the same override directories used to load translations. Bundled
+/// languages remain available even when their external files are missing.
+pub fn available_languages() -> Vec<Language> {
+    available_in(&catalog_dirs())
+}
+
 struct Catalog {
     language: String,
     messages: BTreeMap<String, String>,
@@ -102,8 +162,9 @@ fn placeholders(text: &str) -> Option<BTreeSet<String>> {
 }
 impl Catalog {
     fn load(languages: &[String], dirs: &[PathBuf]) -> Self {
-        let english: BTreeMap<String, String> =
+        let mut english: BTreeMap<String, String> =
             serde_json::from_str(ENGLISH).expect("bundled English catalog");
+        english.remove("_language_name");
         let mut messages = english.clone();
         let mut selected = "en".to_owned();
         // Resolve the first available language, falling back to English per key.
@@ -309,5 +370,54 @@ mod tests {
         let args = &[("0", "a{1}.txt".into()), ("1", "42".into())];
         assert_eq!(interpolate("{1} · {0}", args), "42 · a{1}.txt");
         assert_eq!(interpolate("{} · {}", args), "a{1}.txt · 42");
+    }
+    #[test]
+    fn discovers_new_language_files_metadata_overrides_and_removals() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        std::fs::write(
+            first.path().join("fr.json"),
+            r#"{"_language_name":"Français","Jeda":"Pause FR"}"#,
+        )
+        .unwrap();
+        std::fs::write(first.path().join("ja.json"), r#"{"Jeda":"一時停止"}"#).unwrap();
+        std::fs::write(first.path().join("bad.json"), "invalid JSON").unwrap();
+        std::fs::write(first.path().join("zh-CN.json"), "{}").unwrap();
+        std::fs::write(
+            second.path().join("fr.json"),
+            r#"{"_language_name":"Français personnalisé"}"#,
+        )
+        .unwrap();
+        let dirs = [first.path().into(), second.path().into()];
+        let languages = available_in(&dirs);
+        assert_eq!(
+            languages
+                .iter()
+                .map(|item| item.code.as_str())
+                .collect::<Vec<_>>(),
+            ["en", "fr", "id", "ja", "zh"]
+        );
+        assert_eq!(
+            languages
+                .iter()
+                .find(|item| item.code == "fr")
+                .unwrap()
+                .name,
+            "Français personnalisé"
+        );
+        assert_eq!(
+            languages
+                .iter()
+                .find(|item| item.code == "ja")
+                .unwrap()
+                .name,
+            "ja"
+        );
+        assert_eq!(
+            Catalog::load(&["fr".into()], &dirs).text("Jeda"),
+            "Pause FR"
+        );
+        std::fs::remove_file(first.path().join("ja.json")).unwrap();
+        assert!(!available_in(&dirs).iter().any(|item| item.code == "ja"));
     }
 }

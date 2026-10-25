@@ -1,6 +1,6 @@
 [package]
 name = "mygdrive-sync"
-version = "1.0.5"
+version = "1.0.6"
 edition = "2021"
 description = "Offline-first, preserve-both Google Drive sync engine"
 license = "MIT"

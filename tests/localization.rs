@@ -95,4 +95,17 @@ fn locale_and_explicit_overrides_work_in_fresh_processes() {
         "id",
         "Custom pause",
     );
+    std::fs::write(
+        directory.path().join("fr.json"),
+        r#"{"_language_name":"Français","Jeda":"Pause FR"}"#,
+    )
+    .unwrap();
+    probe(
+        &[
+            ("LANG", "fr_FR.UTF-8"),
+            ("MYGDRIVE_LOCALES_DIR", directory.path().to_str().unwrap()),
+        ],
+        "fr",
+        "Pause FR",
+    );
 }

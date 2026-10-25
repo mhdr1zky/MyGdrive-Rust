@@ -119,6 +119,7 @@ pub enum Command {
     SyncNow,
     Shutdown,
     ShutdownAndWait,
+    RestartAfterUpdate,
     Start,
     SetAutostart(bool),
 }
@@ -129,6 +130,7 @@ pub enum Event {
     Autostart(std::result::Result<bool, String>),
     Activity(ActivityPage),
     ExitReady,
+    RestartReady { start_service: bool },
 }
 pub struct Controller {
     pub commands: tokio::sync::mpsc::Sender<Command>,
@@ -175,9 +177,11 @@ pub fn spawn_observer(
                     tokio::select!{
                         command=input.recv()=>{
                             let Some(command)=command else{return false;};
+                            let restart = matches!(command, Command::RestartAfterUpdate);
+                            let start_service = restart && read_snapshot(&state).await.live;
                             let result=perform(&state,&binary,command).await;
                             if matches!(command,Command::SetAutostart(_)){let _=events.send(Event::Autostart(settings()));}
-                            let event=if matches!(command,Command::ShutdownAndWait) && result.is_ok(){Event::ExitReady}else{Event::Completed(result.map_err(|_|tr("Perintah belum terkonfirmasi. Periksa status service sebelum mencoba kembali.").into()))};
+                            let event=if restart && result.is_ok() { Event::RestartReady { start_service } } else if matches!(command,Command::ShutdownAndWait) && result.is_ok(){Event::ExitReady}else{Event::Completed(result.map_err(|_|tr("Perintah belum terkonfirmasi. Periksa status service sebelum mencoba kembali.").into()))};
                             if events.send(event).is_err(){return false;}
                         },
                         _=poll.tick()=>{},
@@ -220,6 +224,11 @@ pub async fn read_snapshot(state: &Path) -> Snapshot {
     }
 }
 pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'static str> {
+    let command = if matches!(command, Command::RestartAfterUpdate) {
+        Command::ShutdownAndWait
+    } else {
+        command
+    };
     if matches!(command, Command::ShutdownAndWait) && engine_available(state)? {
         return Ok(tr("Service sudah berhenti."));
     }
@@ -272,7 +281,7 @@ pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'
         Command::Resume => Action::Resume,
         Command::SyncNow => Action::SyncNow,
         Command::Shutdown | Command::ShutdownAndWait => Action::Shutdown,
-        Command::Start | Command::SetAutostart(_) => unreachable!(),
+        Command::Start | Command::SetAutostart(_) | Command::RestartAfterUpdate => unreachable!(),
     };
     let mut request = Request::new(action);
     request.session_id = Some(current.status.session_id);
@@ -301,7 +310,7 @@ pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'
         Command::SyncNow => tr("Sinkronisasi telah dijadwalkan."),
         Command::Shutdown => tr("Service akan berhenti setelah siklus aktif selesai."),
         Command::ShutdownAndWait => unreachable!(),
-        Command::Start | Command::SetAutostart(_) => unreachable!(),
+        Command::Start | Command::SetAutostart(_) | Command::RestartAfterUpdate => unreachable!(),
     })
 }
 fn engine_available(state: &Path) -> Result<bool> {

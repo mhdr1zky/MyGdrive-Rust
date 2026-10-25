@@ -6126,3 +6126,93 @@ async fn upload_cleanup_recovers_missing_completed_blob_and_rejects_external_pat
         b"baseline"
     );
 }
+
+#[tokio::test]
+async fn desktop_update_restart_drains_active_work_and_preserves_paused_service() {
+    use mygdrive_sync::{
+        dashboard::{self, Command, Event},
+        service,
+    };
+    async fn ready(controller: &dashboard::Controller) -> bool {
+        loop {
+            while let Ok(event) = controller.events.try_recv() {
+                match event {
+                    Event::RestartReady { start_service } => return start_service,
+                    Event::Completed(Err(error)) => panic!("restart failed: {error}"),
+                    _ => {}
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    for paused in [false, true] {
+        let fixture = Fixture::new(true);
+        fixture.drive.hold_get.store(!paused, Ordering::SeqCst);
+        let engine = Arc::new(fixture.engine().await);
+        let task = tokio::spawn(service::run_owned(
+            engine,
+            fixture.state.clone(),
+            service_config(&fixture),
+            paused,
+            CancellationToken::new(),
+        ));
+        if paused {
+            service_wait(&fixture.state, |s| s.paused).await;
+        } else {
+            tokio::time::timeout(Duration::from_secs(5), fixture.drive.get_entered.notified())
+                .await
+                .unwrap();
+        }
+        let binary = PathBuf::from(env!("CARGO_BIN_EXE_mygdrive-sync"));
+        let controller =
+            dashboard::spawn_observer(fixture.state.clone(), binary.clone(), false).unwrap();
+        controller
+            .commands
+            .try_send(Command::RestartAfterUpdate)
+            .unwrap();
+        if !paused {
+            service_wait(&fixture.state, |s| s.shutdown_requested).await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), ready(&controller))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                !task.is_finished(),
+                "an update must not cancel the active transfer"
+            );
+            fixture.drive.release_get.notify_one();
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_secs(6), ready(&controller))
+                .await
+                .unwrap()
+        );
+        task.await.unwrap().unwrap();
+        assert_eq!(service::last_status(&fixture.state).unwrap().paused, paused);
+        if paused {
+            dashboard::perform(&fixture.state, &binary, Command::Start)
+                .await
+                .unwrap();
+            let resumed = service_wait(&fixture.state, |s| s.paused).await;
+            assert_eq!(resumed.cycles_finished, 0);
+            dashboard::perform(&fixture.state, &binary, Command::ShutdownAndWait)
+                .await
+                .unwrap();
+        }
+    }
+    let fixture = Fixture::new(true);
+    let controller =
+        dashboard::spawn_observer(fixture.state.clone(), PathBuf::from("/nonexistent"), false)
+            .unwrap();
+    controller
+        .commands
+        .try_send(Command::RestartAfterUpdate)
+        .unwrap();
+    assert!(
+        !tokio::time::timeout(Duration::from_secs(3), ready(&controller))
+            .await
+            .unwrap(),
+        "a stopped service must stay stopped after update"
+    );
+}
