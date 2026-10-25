@@ -339,37 +339,6 @@ fn proc_in_use(file: &File) -> Result<bool> {
     Ok(false)
 }
 
-#[cfg(test)]
-mod sandbox_tests {
-    use super::*;
-
-    #[test]
-    fn proc_fallback_in_a_sandbox_never_declares_host_files_unused() {
-        const CHILD: &str = "MYGDRIVE_TEST_SANDBOX_LEASE_CHILD";
-        if std::env::var_os(CHILD).is_some() {
-            let file = tempfile::tempfile().unwrap();
-            assert!(proc_in_use(&file).unwrap());
-            return;
-        }
-        // Use a separate process: changing the environment of concurrent tests
-        // could accidentally disable host-side open-file checks elsewhere.
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "dehydration::sandbox_tests::proc_fallback_in_a_sandbox_never_declares_host_files_unused",
-            ])
-            .env("FLATPAK_ID", "io.github.mhdr1zky.MyGdrive")
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
 /// Caller serializes lifecycle, file, scanner and pin policy. The engine has
 /// freshly verified the cloud copy. Never removes directories or remote data.
 pub async fn evict(db: &Database, root: &Path, file: &LocalFile) -> Result<bool> {
@@ -451,4 +420,35 @@ pub async fn evict(db: &Database, root: &Path, file: &LocalFile) -> Result<bool>
         .execute(&db.pool)
         .await?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod sandbox_tests {
+    use super::*;
+
+    #[test]
+    fn proc_fallback_in_a_sandbox_never_declares_host_files_unused() {
+        const CHILD: &str = "MYGDRIVE_TEST_SANDBOX_LEASE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let file = tempfile::tempfile().unwrap();
+            assert!(proc_in_use(&file).unwrap());
+            return;
+        }
+        // Use a separate process: changing the environment of concurrent tests
+        // could accidentally disable host-side open-file checks elsewhere.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "dehydration::sandbox_tests::proc_fallback_in_a_sandbox_never_declares_host_files_unused",
+            ])
+            .env("FLATPAK_ID", "io.github.mhdr1zky.MyGdrive")
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
