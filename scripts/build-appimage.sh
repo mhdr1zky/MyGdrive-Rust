@@ -45,7 +45,7 @@ for document in README.md CHANGELOG.md OAUTH_SETUP.md LICENSE docs/PERFORMANCE.m
     install -Dm644 "$document" "$app_dir/usr/share/doc/mygdrive-rust/$document"
 done
 install -d "$app_dir/usr/share/metainfo"
-python3 - "$version" "$app_dir/usr/share/metainfo/mygdrive.appdata.xml" <<'PYMETA'
+python3 - "$version" "$app_dir/usr/share/metainfo/io.github.mhdr1zky.MyGdrive.metainfo.xml" <<'PYMETA'
 import pathlib,sys
 pathlib.Path(sys.argv[2]).write_text(pathlib.Path('packaging/appimage/mygdrive.appdata.xml.in').read_text().replace('@VERSION@',sys.argv[1]))
 PYMETA

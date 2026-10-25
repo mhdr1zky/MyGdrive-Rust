@@ -2,6 +2,8 @@
 <component type="desktop-application">
   <id>io.github.mhdr1zky.MyGdrive</id>
   <name>MyGdrive Rust</name>
+  <developer id="io.github.mhdr1zky"><name>MyGdrive Rust contributors</name></developer>
+  <content_rating type="oars-1.1"/>
   <summary>Synchronize Google Drive and choose offline files</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>

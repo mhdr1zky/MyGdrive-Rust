@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build the native-architecture Debian package; never installs it on the host.
 set -euo pipefail
-if [[ $# -ne 0 ]]; then
-    printf 'Usage: %s\n' "$0" >&2
+if [[ $# -gt 1 || ( $# -eq 1 && $1 != --skip-build ) ]]; then
+    printf 'Usage: %s [--skip-build]\n' "$0" >&2
     exit 2
 fi
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,7 +29,9 @@ if [[ -d "$project_dir/.tools/gtk-sdk/root/usr" ]]; then
     export PKG_CONFIG_PATH="$project_dir/.tools/gtk-sdk/root/usr/lib/x86_64-linux-gnu/pkgconfig:$project_dir/.tools/gtk-sdk/root/usr/share/pkgconfig:${PKG_CONFIG_PATH:-}"
 fi
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
-"$cargo_bin" build --locked --release --all-features --bins
+if [[ $# -eq 0 ]]; then
+    "$cargo_bin" build --locked --release --all-features --bins
+fi
 
 version=$(python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("Cargo.toml").read_text())["package"]["version"])')
 dpkg --validate-version "$version"
@@ -38,6 +40,12 @@ target_dir=${CARGO_TARGET_DIR:-"$project_dir/target"}
 if [[ $target_dir != /* ]]; then
     target_dir="$project_dir/$target_dir"
 fi
+for binary in mygdrive-sync mygdrive-desktop mygdrive-mount; do
+    [[ $("$target_dir/release/$binary" --version) == *" $version" ]] || {
+        printf 'Release binary version mismatch: %s\n' "$binary" >&2
+        exit 1
+    }
+done
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/mygdrive-deb.XXXXXXXX")
 trap 'rm -rf -- "$work_dir"' EXIT
 package_dir="$work_dir/debian/mygdrive-rust"
