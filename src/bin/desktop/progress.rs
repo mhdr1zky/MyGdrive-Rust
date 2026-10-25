@@ -15,7 +15,7 @@ pub struct Popup {
     known: RefCell<HashSet<String>>,
     initialized: Cell<bool>,
     signature: RefCell<String>,
-    last_shown: Cell<i64>,
+    last_notified: Cell<i64>,
     snapshot_mode: bool,
     pending_count: Cell<usize>,
     retry_count: Cell<usize>,
@@ -78,7 +78,7 @@ impl Popup {
             known: RefCell::new(HashSet::new()),
             initialized: Cell::new(false),
             signature: RefCell::new(String::new()),
-            last_shown: Cell::new(0),
+            last_notified: Cell::new(0),
             snapshot_mode,
             pending_count: Cell::new(0),
             retry_count: Cell::new(0),
@@ -181,18 +181,17 @@ impl Popup {
             && available
             && !self.snapshot_mode
             && !self.window.is_visible()
-            && now - self.last_shown.get() > 10_000
+            && now - self.last_notified.get() > 10_000
         {
-            self.window.present();
-            self.last_shown.set(now);
+            self.last_notified.set(now);
             if let Some(app) = self.window.application() {
                 let notification = gio::Notification::new("MyGdrive Rust — sinkronisasi");
                 notification.set_body(Some(if page.pending_files == 0 {
-                    "Sinkronisasi file selesai. Klik untuk melihat hasil."
+                    "Sinkronisasi file selesai."
                 } else {
-                    "Perubahan Drive sedang diproses bertahap. Klik untuk melihat antrean terbaru."
+                    "Perubahan Drive sedang diproses bertahap."
                 }));
-                notification.set_default_action("app.progress");
+                notification.add_button("Lihat detail", "app.progress");
                 app.send_notification(Some("sync-progress"), &notification);
             }
         }

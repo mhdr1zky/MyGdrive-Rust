@@ -2,11 +2,13 @@
 
 Sinkronisasi Google Drive untuk Linux, ditulis dengan Rust. Akses My Drive dari desktop dan pengelola berkas, unduh konten saat dibutuhkan, lalu pilih file atau folder yang ingin tetap tersedia tanpa internet.
 
-**Rilis v1.0.0 menggunakan paket `.deb` untuk amd64 (x86_64), dengan target Ubuntu 24.04 dan Linux Mint 22.** Paket mencakup dashboard GTK4, CLI, tray, dan mount FUSE. Proyek ini independen dan tidak berafiliasi dengan Google.
+**Rilis terbaru: [v1.0.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.1)** — paket `.deb` amd64 untuk Ubuntu 24.04/Linux Mint 22 dan bundle Flatpak x86_64. Proyek ini independen dan tidak berafiliasi dengan Google.
+
+Versi ini memperbaiki antrean file baru yang sudah dihapus sebelum unggah, pilihan offline mandiri/rekursif, pelepasan ruang disk setelah unpin, serta waktu pemeriksaan sinkronisasi. Lihat [catatan rilis](CHANGELOG.md).
 
 ## Preview aplikasi
 
-Tangkapan layar versi pengembangan di Linux, menggunakan profil dan berkas contoh. Tampilan paket rilis dapat berbeda dari versi pengembangan.
+Tangkapan layar aplikasi di Linux, menggunakan profil dan berkas contoh. Tampilan drive virtual di Thunar berasal dari paket native; lihat perbedaan paket di bawah.
 
 | Dashboard sinkronisasi | Drive online di Thunar |
 | --- | --- |
@@ -19,21 +21,54 @@ Tangkapan layar versi pengembangan di Linux, menggunakan profil dan berkas conto
 - **Sinkronisasi dua arah:** unggah, unduh, rename, pindahkan, dan Trash file atau folder dengan pemeriksaan perubahan server.
 - **Hanya-online secara default:** inventaris menyimpan metadata; konten diunduh ketika dibuka melalui mount online atau dipilih tersedia offline.
 - **Pilihan offline per file/folder:** pilihan folder berlaku secara rekursif, termasuk anak baru.
+- **File sementara editor:** file pemilik Office `~$…`, lock LibreOffice `.~lock.…#`, dan pola scratch Word yang dikenal tidak masuk antrean sinkronisasi baru. Penyimpanan dokumen melalui file sementara lalu rename tetap didukung.
 - **Konflik mempertahankan kedua versi:** perubahan isi yang berbeda disimpan sebagai salinan konflik. Pemulihan tertentu ditahan untuk ditinjau sebelum diunggah.
 - **Dashboard dan tray:** lihat status, progres, antrean, serta aktivitas; jeda/lanjutkan sinkronisasi dan jalankan sinkronisasi sekarang.
+- **Aktivitas tanpa popup otomatis:** notifikasi tetap muncul; jendela aktivitas dibuka melalui tombol **Lihat detail** atau tindakan manual pengguna.
 - **Profil terpisah:** simpan pasangan akun Google, folder Drive, dan folder lokal dengan state masing-masing.
 - **Integrasi Linux:** mount FUSE, menu konteks dan badge folder Thunar, serta autostart per profil yang dapat diaktifkan pengguna.
 - **Antrean dan cache persisten:** SQLite WAL, checksum konten, pemulihan operasi setelah restart, dan pembersihan cache yang melindungi file offline serta perubahan lokal.
+- **File sementara yang sudah hilang selesai otomatis:** file lokal tanpa identitas cloud tidak terus menunggu penghapusan; jurnal unggahan aktif dan file pemulihan tetap diperiksa sebelum antrean diselesaikan.
+
+## Pilih paket
+
+| Fitur | `.deb` | Flatpak |
+| --- | --- | --- |
+| Dashboard, tray, login OAuth, sinkronisasi folder lokal | Ya | Ya |
+| Pilih file/subfolder tersedia offline dan unpin | Ya | Ya |
+| Drive virtual FUSE, unduh saat dibuka melalui Thunar | Ya | Belum tersedia |
+| Menu konteks dan badge Thunar | Opsional | Belum tersedia |
+| Mulai saat login dari pengaturan aplikasi | Opsional | Belum tersedia |
+
+Flatpak berfokus pada folder lokal dan pilihan offline di dashboard. Paket `.deb` menyediakan integrasi pengelola berkas native yang ditampilkan pada screenshot Thunar.
+
+## Instalasi Flatpak
+
+Unduh `mygdrive-rust_1.0.1_x86_64.flatpak` dari [rilis v1.0.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.1), lalu jalankan:
+
+```bash
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user ./mygdrive-rust_1.0.1_x86_64.flatpak
+flatpak run io.github.mhdr1zky.MyGdrive
+```
+
+Bundle memerlukan runtime **GNOME 50** dari Flathub; runtime tidak disertakan dalam file `.flatpak`. Rilis ini didistribusikan melalui GitHub, bukan listing aplikasi di Flathub. Untuk memperbarui, instal bundle versi yang lebih baru dengan perintah yang sama. Lihat [dokumentasi bundle Flatpak](https://docs.flatpak.org/en/latest/single-file-bundles.html).
+
+Flatpak mendapat akses jaringan dan folder home untuk menyinkronkan folder pilihan. Data dan tokennya terpisah di `~/.var/app/io.github.mhdr1zky.MyGdrive/data/mygdrive/`. Jangan menjalankan paket native dan Flatpak pada folder lokal yang sama secara bersamaan. CLI dapat dibuka dengan `flatpak run --command=mygdrive-sync io.github.mhdr1zky.MyGdrive --help`.
+
+Pembersihan setelah unpin memakai pemeriksaan kernel untuk melindungi file yang dibuka editor di luar sandbox. Jika filesystem tidak mendukung pemeriksaan tersebut, Flatpak mempertahankan salinan lokal sampai pelepasan dapat dinyatakan aman.
 
 ## Instalasi `.deb`
 
-Unduh `mygdrive-rust_1.0.0_amd64.deb` dari bagian **Releases** repositori, lalu jalankan dari direktori unduhan:
+Unduh `mygdrive-rust_1.0.1_amd64.deb` dari bagian **Releases** repositori, lalu jalankan dari direktori unduhan:
 
 ```bash
-sudo apt install ./mygdrive-rust_1.0.0_amd64.deb
+sudo apt install ./mygdrive-rust_1.0.1_amd64.deb
 ```
 
 `apt` memasang dependensi runtime yang diperlukan. Rust dan compiler tidak diperlukan untuk menjalankan paket. Rilis ini menyediakan paket amd64; ARM, Windows, macOS, dan Debian 12 belum menjadi target paket v1.
+
+Untuk memperbarui v1.0.0, keluar melalui menu **Keluar** agar operasi aktif selesai, lalu instal `.deb` baru. Folder lokal, akun, dan pilihan offline tetap digunakan. Metadata state bermigrasi dari schema 3 ke 4; v1.0.0 tidak dapat membaca state yang sudah dimigrasi. Simpan cadangan state lama bila perlu kembali ke versi sebelumnya.
 
 Buka **MyGdrive Rust** dari menu aplikasi atau terminal:
 
@@ -55,9 +90,11 @@ Jika sebelumnya memasang launcher dari source, entri per pengguna di `~/.local/s
 2. Buka **MyGdrive Rust → Akun dan folder → Hubungkan akun baru…**, pilih JSON client, lalu selesaikan login melalui browser sistem.
 3. Pilih **My Drive** atau subfolder yang ingin disinkronkan, lalu pilih folder lokal kosong yang terpisah dari direktori state aplikasi.
 4. Simpan pasangan folder dan buka dashboard profil tersebut. Mulai service dari dashboard untuk membaca inventaris dan menjalankan sinkronisasi.
-5. Gunakan menu **Tersedia offline** untuk memilih konten yang perlu disimpan di komputer. Tunggu unduhan selesai sebelum menggunakannya tanpa internet.
+5. Gunakan menu **Tersedia offline** untuk memilih konten yang perlu disimpan di komputer. File atau subfolder dapat dipilih sendiri meskipun folder induk dan My Drive hanya online. Memilih folder berlaku untuk seluruh turunannya, termasuk anak baru. Tunggu unduhan selesai sebelum menggunakannya tanpa internet.
 
-Melepas pilihan offline mempertahankan salinan lokal yang sudah ada; tindakan ini belum membebaskan ruang disk. File yang belum diunduh hanya dapat dibuka ketika koneksi tersedia. Untuk melihat item hanya-online di pengelola berkas, siapkan mount FUSE berikut.
+Jika pilihan sudah aktif tetapi file belum muncul secara lokal, periksa bahwa service profil yang sama sedang berjalan, tidak dijeda, dan terhubung. Saat dijeda, pilihan tetap tersimpan; tekan **Lanjutkan** pada dashboard untuk menjalankan unduhan. Jendela offline menampilkan kondisi dijeda secara eksplisit. Memilih folder induk bukan syarat untuk mengunduh satu file atau subfolder.
+
+Melepas pilihan offline mengantrekan pembersihan otomatis pada sinkronisasi berikutnya yang berhasil saat service berjalan, tidak dijeda, dan online. File bersih yang sudah tersinkron serta cache terkait dibuang dari disk; perubahan tertunda, file yang sedang dibuka, dan pin yang masih berlaku tetap dilindungi sampai aman. File di Google Drive tidak dihapus. Metadata tetap terlihat melalui mount online, dan membuka file kembali akan mengunduhnya lagi. Untuk melihat item hanya-online di pengelola berkas, siapkan mount FUSE berikut.
 
 ### Mount online dan Thunar
 
@@ -102,8 +139,10 @@ mygdrive-sync --state "$HOME/.local/share/mygdrive-cli" --account default \
 
 # Watcher lokal dan polling Drive berkelanjutan.
 mygdrive-sync --state "$HOME/.local/share/mygdrive-cli" --account default \
-  --root "$HOME/MyGDrive" --drive-folder DRIVE_FOLDER_ID run --interval 30
+  --root "$HOME/MyGDrive" --drive-folder DRIVE_FOLDER_ID run --interval 10
 ```
+
+Profil baru memakai polling cloud 10 detik; interval profil yang sudah tersimpan tetap dipertahankan bila tidak diberikan override. Watcher lokal membangunkan sinkronisasi setelah perubahan, tanpa menunggu polling. Pemeriksaan metadata rutin file bersih dapat memakai empat GET bersamaan; transfer isi background tetap berurutan.
 
 Kontrol service dari terminal lain:
 
@@ -117,6 +156,8 @@ mygdrive-sync --state "$HOME/.local/share/mygdrive-cli" service shutdown
 
 `scan` dan `status` dapat digunakan tanpa mengakses Google Drive. Perintah CLI yang menulis state seperti `scan`, `sync`, `pin`, dan `cache-prune` membutuhkan lock yang sama dengan daemon; hentikan daemon terlebih dahulu. Gunakan kontrol service di atas saat daemon aktif. Lihat opsi lengkap dengan `mygdrive-sync --help`.
 
+Uji tiruan 24 file dengan latensi metadata 40 ms mencatat waktu 1.150 → 360 ms, sekitar 3,2 kali lebih cepat, dengan jumlah GET yang sama dan tanpa unduhan ulang. Angka ini bukan jaminan kecepatan Google Drive nyata. Kondisi pengukuran dan batasnya ada di [catatan kinerja](docs/PERFORMANCE.md).
+
 ## Data lokal dan akses akun
 
 State default berada di `~/.local/share/mygdrive` atau mengikuti `$XDG_DATA_HOME`. Profil dari dashboard disimpan pada subdirektori `profiles/`. State memuat konfigurasi, SQLite, cache, antrean upload, dan token OAuth; folder lokal pengguna disimpan terpisah.
@@ -125,16 +166,42 @@ Login menggunakan browser sistem, PKCE, pemeriksaan state, dan callback loopback
 
 Scope `drive` memberi akses baca dan kelola pada seluruh file Drive yang dapat diakses akun. Memilih subfolder hanya membatasi perilaku aplikasi, bukan izin OAuth. Scope `drive-file` lebih terbatas dan tidak otomatis memberi akses ke file lama; integrasi Google Picker belum tersedia. Lihat [penjelasan scope dari Google](https://developers.google.com/workspace/drive/api/guides/api-specific-auth).
 
-## Batas v1.0.0
+## Batas v1.0.1
 
 - Mendukung **My Drive dan file biasa** seperti dokumen Office, PDF, gambar, teks, dan arsip. Isi Google Docs/Sheets/Slides native belum mendukung sinkronisasi dan round-trip.
 - Shared Drives dan seluruh tampilan **Shared with me** belum didukung.
 - Setiap state terikat pada satu pasangan akun, folder lokal, dan folder Drive. Profil dapat dibuka terpisah; supervisor semua profil belum tersedia.
-- Pelepasan pin belum menghapus salinan lokal secara otomatis. Budget cache hanya membersihkan objek cache yang memenuhi syarat.
+- Pembersihan setelah pelepasan pin menunggu sinkronisasi berhasil. File dengan perubahan tertunda, perlu tinjauan, sedang dibuka, atau masih dipin sendiri maupun melalui induk tetap disimpan.
 - Unduhan yang terputus dimulai ulang; resume Range belum tersedia.
 - Symlink, hardlink, path non-UTF-8, dan jenis file khusus ditolak oleh scanner.
 - Konflik metadata, delete-versus-edit, dan pemulihan tertentu membutuhkan peninjauan. Trash folder menggunakan pemeriksaan dan kompensasi, bukan transaksi atomik di Google Drive.
 - Inventaris awal akun besar dapat memerlukan waktu. Dukungan tray dan badge bergantung pada sesi desktop serta pengelola berkas.
+
+## Perbandingan dengan Google Drive for desktop
+
+Perbandingan ini diperiksa pada **25 Oktober 2026** dari dokumentasi resmi Google. MyGdrive Rust menyediakan klien Linux; aplikasi desktop resmi Google ditujukan untuk Windows dan macOS. Tabel ini memisahkan perilaku yang sudah tersedia dari pekerjaan yang masih diperlukan, tanpa menganggap seluruh fitur Google Drive sudah setara.
+
+| Perilaku | Google Drive for desktop | MyGdrive Rust saat ini |
+| --- | --- | --- |
+| Daftar file tanpa mengunduh seluruh isi Drive | Mode streaming memakai drive virtual; isi diambil ketika diperlukan. [Streaming dan mirroring](https://support.google.com/drive/answer/13401938?hl=en). | Default metadata saja; mount FUSE menyediakan nama file/folder dan mengunduh file saat dibuka. Setup mount masih memerlukan konfigurasi tersendiri. |
+| Pilihan offline per file/subfolder | File atau folder dapat dipilih sendiri; pilihan folder juga mencakup isi dan item baru. [Akses offline](https://support.google.com/drive/answer/2375012?hl=en). | Pilihan mandiri dan rekursif, termasuk turunan baru; tidak perlu mempin induk. Unduhan menunggu service berjalan dan tidak dijeda. |
+| Ruang disk untuk konten streaming | Cache menyimpan konten yang dipakai dan dikelola otomatis; tersedia tampilan Offline files untuk melihat pemakaian. [Pengaturan cache](https://support.google.com/drive/answer/13470231?hl=en). | Unpin mengantrekan pelepasan salinan bersih dan cache terkait. Budget cache opsional belum menjadi pengelolaan otomatis seluruh salinan hasil membuka file; ringkasan ruang disk belum tersedia. |
+| Mode mirror My Drive | Pengguna dapat beralih antara streaming dan mirror salinan penuh. [Mode sinkronisasi](https://support.google.com/drive/answer/13401938?hl=en). | Alur pengguna berfokus pada hanya-online dan pin. Mode mirror internal belum memiliki pengaturan dashboard dan migrasi mode yang didukung pengguna. |
+| Shared Drives | Shared Drives memakai streaming. [Jenis drive](https://support.google.com/drive/answer/13401938?hl=en). | Baru My Drive/subfolder; Shared Drives dan tampilan Shared with me belum didukung. |
+| Beberapa akun dalam satu aplikasi | Mendukung sampai empat akun bersamaan. [Pengaturan akun](https://support.google.com/drive/answer/13470231?hl=en). | Profil akun/folder terpisah dapat dijalankan; belum ada supervisor dan tampilan aktivitas gabungan seluruh profil. |
+| Google Docs, Sheets, Slides offline | Akses offline disiapkan melalui Drive di web. [Dokumen Google offline](https://support.google.com/drive/answer/2375012?hl=en). | Format native belum bisa diedit offline atau round-trip; file biasa seperti DOCX/XLSX/PPTX/PDF dapat diunduh dan disinkronkan. |
+
+Google menyatakan dukungan backup Google Photos melalui Drive for desktop berakhir **10 Agustus 2026** pada [halaman pengaturan resmi](https://support.google.com/drive/answer/13470231?hl=en). Fitur lama tersebut tidak dijadikan target kesetaraan klien ini.
+
+## Rencana pengembangan
+
+Daftar ini adalah urutan pekerjaan yang diusulkan, bukan fitur yang sudah tersedia atau janji tanggal rilis.
+
+1. **Keandalan pilihan offline dan informasi kegagalan.** Pertahankan pengujian file/subfolder mandiri melalui dashboard, IPC, dan Thunar; turunan lama/baru mengikuti pin induk, termasuk direktori kosong. Tampilkan sebab unduhan tertunda, koneksi, izin unduh, dan kesiapan seluruh isi folder dengan jelas. Lanjutkan uji pemulihan saat aplikasi berhenti di tengah unduhan atau pelepasan salinan lokal. Perluas deteksi siklus simpan Excel untuk file sementara bernama acak tanpa mengabaikan file pengguna yang bernama serupa. File `.tmp`, backup, serta file lock yang sudah tercatat sebelum filter diperkenalkan tetap dipertahankan; jangan membersihkannya tanpa pemeriksaan terpisah.
+2. **Pengelolaan ruang disk menyeluruh.** Tambahkan ringkasan ukuran pin/cache/antrean, budget bawaan yang dapat diatur, dan pelepasan otomatis salinan bersih yang hanya pernah dibuka. Koleksi snapshot upload yang sudah selesai harus tetap melindungi operasi aktif dan berkas pemulihan; pembersihan cache saat ini belum mencakup seluruh area state.
+3. **Setup desktop dan beberapa profil.** Satukan konfigurasi mount/menu Thunar ke onboarding, periksa binary/service yang benar setelah pembaruan, lalu sediakan supervisor seluruh profil dengan aktivitas dan kegagalan per akun.
+4. **Mode dan cakupan Drive.** Sediakan perpindahan streaming/mirror yang memverifikasi seluruh perubahan lokal sebelum melepas salinan; kemudian tambahkan Shared Drives serta identitas/izin yang diperlukan untuk item bersama dan shortcut.
+5. **Alur dokumen Google dan transfer besar.** Tambahkan pembukaan native Docs/Sheets/Slides di web dan ekspor yang jelas dibedakan dari sinkronisasi format native. Lanjutkan dengan resume unduhan serta pengaturan transfer; ekspor tidak boleh dipresentasikan sebagai editor offline native Google.
 
 ## Build dari source
 
@@ -147,14 +214,27 @@ sudo apt install build-essential pkg-config libgtk-4-dev dpkg-dev python3
 ./scripts/build-deb.sh
 
 # Hasil build lokal.
-sudo apt install ./dist/mygdrive-rust_1.0.0_amd64.deb
+sudo apt install ./dist/mygdrive-rust_1.0.1_amd64.deb
 ```
+
+Bundle Flatpak memakai binary release dari source dan `Cargo.lock` yang sama:
+
+```bash
+flatpak install --user flathub org.gnome.Platform//50
+./scripts/build-flatpak.sh
+# Jika build release sudah selesai:
+./scripts/build-flatpak.sh --skip-build
+```
+
+Script memeriksa versi binary, menguji pemuatan executable di runtime GNOME 50, lalu mengekspor bundle. Tidak diperlukan `flatpak-builder` atau SDK Rust tambahan karena Cargo mengompilasi sebelum pengemasan. Flatpak tidak membundel helper FUSE dan tidak mendapat izin menjalankan perintah pada host.
 
 Build CLI saja tidak membutuhkan GTK:
 
 ```bash
 cargo build --locked --release --bin mygdrive-sync
 ```
+
+Launcher source memilih set lengkap desktop/service/mount yang lebih baru antara `target/release` dan `target/debug`, dengan release sebagai pilihan saat waktunya sama. Ketiganya harus executable agar dianggap satu set lengkap. Paket `.deb` dibangun memakai profil release.
 
 Pemeriksaan pengembangan:
 
@@ -164,7 +244,7 @@ cargo clippy --locked --all-features --all-targets -- -D warnings
 cargo test --locked --all-features --all-targets
 ```
 
-Tes otomatis memakai adapter tiruan dan server lokal. Tes live onboarding tetap opt-in. Workflow CI menjalankan pemeriksaan Rust; push tag yang sesuai versi manifest, seperti `v1.0.0`, menjalankan build dan publikasi paket `.deb` melalui GitHub Actions. Detail perubahan tersedia pada [catatan rilis](CHANGELOG.md).
+Tes otomatis memakai adapter tiruan dan server lokal. Tes live onboarding tetap opt-in. Untuk rilis, samakan versi di `Cargo.toml`, `Cargo.lock`, catatan rilis, dan `.github/release-version`, lalu push ke `main`; workflow menguji, membangun `.deb` dan Flatpak, mengunggah checksum, kemudian memublikasikan rilis beserta tag pada commit tersebut. Push tag versi juga didukung. Detail perubahan tersedia pada [catatan rilis](CHANGELOG.md).
 
 ## Lisensi
 

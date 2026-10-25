@@ -1,4 +1,4 @@
-//! Durable, additive offline selections. Unpin never deletes local or remote data.
+//! Durable offline selections. Unpin queues safe local cleanup, never cloud deletion.
 use crate::{
     db::Database,
     local,
@@ -72,6 +72,8 @@ pub struct Page {
     pub inventory_complete: bool,
     pub last_verified_ms: Option<i64>,
     pub local_root: std::path::PathBuf,
+    #[serde(default)]
+    pub service_paused: bool,
 }
 struct Entry {
     node: Node,
@@ -320,6 +322,13 @@ impl Graph {
             .filter_map(|e| e.file.as_ref().map(|f| f.id.clone()))
             .collect()
     }
+    pub fn requested_directory_ids(&self) -> HashSet<String> {
+        self.entries
+            .values()
+            .filter(|e| e.node.folder && e.node.effective)
+            .filter_map(|e| e.node.key.strip_prefix("r:").map(str::to_owned))
+            .collect()
+    }
     pub async fn promote(&self, db: &Database) -> Result<()> {
         if self.aliases.is_empty() {
             return Ok(());
@@ -366,6 +375,7 @@ impl Graph {
             inventory_complete: self.inventory_complete,
             last_verified_ms: self.last_verified_ms,
             local_root: self.local_root.clone(),
+            service_paused: false,
         };
         for child in children.into_iter().skip(offset).take(32) {
             page.children.push(child);
@@ -414,6 +424,23 @@ impl Graph {
             ));
         }
         sqlx::query("INSERT INTO offline_selections(target,pinned) VALUES(?,?) ON CONFLICT(target) DO UPDATE SET pinned=excluded.pinned").bind(target).bind(pinned).execute(&mut *tx).await?;
+        if !pinned {
+            let mut pending = vec![target.to_string()];
+            while let Some(key) = pending.pop() {
+                if let Some(entry) = self.entries.get(&key) {
+                    pending.extend(entry.children.iter().cloned());
+                    if let Some(file) = &entry.file {
+                        sqlx::query(
+                            "INSERT INTO dehydration_requests(file_id,request_id) SELECT f.id,? FROM files f WHERE f.id=? AND (coalesce(json_extract(f.data,'$.materialized'),0)!=0 OR json_extract(f.data,'$.fingerprint') IS NOT NULL OR json_extract(f.data,'$.baseline') IS NOT NULL OR EXISTS(SELECT 1 FROM sync_operations o WHERE o.file_id=f.id AND o.stage NOT IN ('done','cancelled'))) ON CONFLICT(file_id) DO UPDATE SET request_id=excluded.request_id",
+                        )
+                        .bind(request_id)
+                        .bind(&file.id)
+                        .execute(&mut *tx)
+                        .await?;
+                    }
+                }
+            }
+        }
         sqlx::query("INSERT INTO offline_commands(request_id,payload) VALUES(?,?)")
             .bind(request_id)
             .bind(payload)

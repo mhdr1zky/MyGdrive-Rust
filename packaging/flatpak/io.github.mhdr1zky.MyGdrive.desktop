@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MyGdrive Rust
+Comment=Sync Google Drive folders and choose offline files
+Exec=mygdrive
+Icon=io.github.mhdr1zky.MyGdrive
+Terminal=false
+StartupNotify=true
+Categories=Network;FileTransfer;

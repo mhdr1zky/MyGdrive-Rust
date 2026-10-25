@@ -247,7 +247,7 @@ async fn run_worker(
         };
         let result = tokio::select! {
             _ = cancel.cancelled() => break,
-            result = tokio::time::timeout(std::time::Duration::from_secs(10), item.spawn()) => result,
+            result = tokio::time::timeout(std::time::Duration::from_secs(10), item.disable_dbus_name(std::env::var_os("FLATPAK_ID").is_some()).spawn()) => result,
         };
         if let Ok(Ok(handle)) = result {
             online.store(true, Ordering::Release);

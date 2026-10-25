@@ -8,6 +8,7 @@ use crate::{
     Error, Result,
 };
 use fs2::FileExt;
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{HashMap, HashSet},
@@ -21,6 +22,8 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::{Mutex, RwLock, Semaphore};
+
+const ROUTINE_METADATA_PARALLELISM: usize = 4;
 
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncReport {
@@ -67,6 +70,60 @@ pub struct SyncEngine {
 }
 
 impl SyncEngine {
+    fn routine_metadata_candidate(file: &LocalFile) -> bool {
+        let (Some(fingerprint), Some(baseline), Some(remote_id)) =
+            (&file.fingerprint, &file.baseline, &file.remote_id)
+        else {
+            return false;
+        };
+        file.status == "synced"
+            && file.materialized
+            && !file.review_required
+            && file.relative_path == baseline.relative_path
+            && fingerprint.digest == baseline.digest
+            && remote_id == &baseline.remote.id
+            && !baseline.remote.trashed
+            && !baseline.remote.unavailable
+    }
+
+    fn metadata_snapshot_matches(snapshot: &LocalFile, current: &LocalFile) -> bool {
+        Self::routine_metadata_candidate(current)
+            && snapshot.id == current.id
+            && snapshot.generation == current.generation
+            && snapshot.relative_path == current.relative_path
+            && snapshot.remote_id == current.remote_id
+            && snapshot.fingerprint == current.fingerprint
+            && snapshot.status == current.status
+            && snapshot.materialized == current.materialized
+            && snapshot.review_required == current.review_required
+            && snapshot.available_offline == current.available_offline
+            && match (&snapshot.baseline, &current.baseline) {
+                (Some(before), Some(after)) => {
+                    before.digest == after.digest
+                        && before.relative_path == after.relative_path
+                        && before.remote_path == after.remote_path
+                        && before.remote == after.remote
+                }
+                _ => false,
+            }
+    }
+
+    async fn routine_metadata(
+        &self,
+        snapshot: LocalFile,
+    ) -> (LocalFile, Result<Option<RemoteFile>>) {
+        let result = self
+            .drive
+            .get(
+                snapshot
+                    .remote_id
+                    .as_deref()
+                    .expect("routine file has remote ID"),
+            )
+            .await;
+        (snapshot, result)
+    }
+
     pub fn progress(&self) -> SyncProgress {
         let mut progress = self.progress.read().unwrap().clone();
         (progress.active_operations, progress.last_activity_ms) = self.activity.snapshot();
@@ -106,7 +163,14 @@ impl SyncEngine {
         Ok(())
     }
     pub async fn offline_page(&self, parent: &str, offset: usize) -> Result<crate::offline::Page> {
-        crate::offline::Graph::load(&self.db, true)
+        Self::offline_page_from(&self.db, parent, offset).await
+    }
+    pub(crate) async fn offline_page_from(
+        db: &Database,
+        parent: &str,
+        offset: usize,
+    ) -> Result<crate::offline::Page> {
+        crate::offline::Graph::load(db, true)
             .await?
             .page(parent, offset)
     }
@@ -188,6 +252,10 @@ impl SyncEngine {
     /// Installation still uses the journal, generation and scanner gate.
     pub async fn hydrate(&self, id: &str) -> Result<()> {
         let _lifecycle = self.hydration_lifecycle.read().await;
+        {
+            let _guard = self.scanner.gate.lock().await;
+            crate::dehydration::recover(&self.db, &self.scanner.root).await?;
+        }
         self.verify_local_root().await?;
         // Available bytes do not wait behind an upload of this same file.
         if self.hydration_local(&self.db.file(id).await?).await? {
@@ -418,6 +486,7 @@ impl SyncEngine {
             db: db.clone(),
             gate: Arc::new(Mutex::new(())),
         };
+        crate::dehydration::recover(&db, &scanner.root).await?;
         let cache = CacheStore::new(state, db.clone())?;
         let activity = Arc::new(crate::activity::Activity::default());
         let drive = Arc::new(crate::activity::TrackedDrive {
@@ -563,11 +632,11 @@ impl SyncEngine {
             )
             .await?,
         );
-        let initial_requested = {
+        let (initial_requested, pinned_directories) = {
             let _policy = self.cache.policy_gate.lock().await;
             let graph = crate::offline::Graph::load(&self.db, false).await?;
             graph.promote(&self.db).await?;
-            graph.requested_file_ids()
+            (graph.requested_file_ids(), graph.requested_directory_ids())
         };
         let mut active = HashSet::new();
         let online_default = self.db.setting("storage_mode").await?.as_deref() != Some("mirror");
@@ -601,6 +670,18 @@ impl SyncEngine {
         let remotes = self.db.remotes().await?;
         let root_id = self.root_id().await?;
         let paths = project_paths(&remotes, &root_id);
+        if !pinned_directories.is_empty() {
+            let _guard = self.scanner.gate.lock().await;
+            self.verify_local_root().await?;
+            crate::directory_sync::materialize_pinned(
+                &self.db,
+                &self.scanner.root,
+                &remotes,
+                &paths,
+                &pinned_directories,
+            )
+            .await?;
+        }
         let remote_by_id: HashMap<_, _> = remotes.iter().map(|r| (r.id.as_str(), r)).collect();
         {
             let mut index = self.folder_index.lock().await;
@@ -699,7 +780,28 @@ impl SyncEngine {
                 2
             }
         });
-        for snapshot in candidates {
+        let mut candidates = candidates.into_iter().peekable();
+        let mut metadata = FuturesUnordered::new();
+        loop {
+            // Dirty saves and requested downloads retain their stable priority.
+            // Only consecutive clean checks share the bounded network window;
+            // each result still reconciles serially under its usual file lock.
+            while metadata.len() < ROUTINE_METADATA_PARALLELISM
+                && candidates.peek().is_some_and(|file| {
+                    !active.contains(&file.id) && Self::routine_metadata_candidate(file)
+                })
+            {
+                metadata.push(self.routine_metadata(candidates.next().unwrap()));
+            }
+            let (snapshot, prefetched) = if !metadata.is_empty() {
+                let (snapshot, result) = metadata.next().await.unwrap();
+                (snapshot, Some(result))
+            } else {
+                let Some(snapshot) = candidates.next() else {
+                    break;
+                };
+                (snapshot, None)
+            };
             // Most streamed-account rows are untouched online-only metadata.
             // They require no mutation, lock or extra SELECT. If an explicit
             // open materializes one concurrently, it owns its journal; a later
@@ -757,19 +859,29 @@ impl SyncEngine {
                 continue;
             }
             let remote = match &file.remote_id {
-                Some(id) => match self.drive.get(id).await? {
-                    Some(r) => Some(r),
-                    None => {
-                        let mut inaccessible = remote_by_id
-                            .get(id.as_str())
-                            .copied()
-                            .cloned()
-                            .unwrap_or_default();
-                        inaccessible.id = id.clone();
-                        inaccessible.unavailable = true;
-                        Some(inaccessible)
+                Some(id) => {
+                    // Prefetch owns no file lock. A save, pin change or metadata
+                    // intent invalidates its snapshot and requires a fresh GET.
+                    let current = match prefetched {
+                        Some(result) if Self::metadata_snapshot_matches(&snapshot, &file) => {
+                            result?
+                        }
+                        _ => self.drive.get(id).await?,
+                    };
+                    match current {
+                        Some(remote) => Some(remote),
+                        None => {
+                            let mut inaccessible = remote_by_id
+                                .get(id.as_str())
+                                .copied()
+                                .cloned()
+                                .unwrap_or_default();
+                            inaccessible.id = id.clone();
+                            inaccessible.unavailable = true;
+                            Some(inaccessible)
+                        }
                     }
-                },
+                }
                 None => None,
             };
             // Content/version-only changes cannot change ancestry. Reuse the
@@ -935,7 +1047,130 @@ impl SyncEngine {
         );
         sqlx::query("INSERT INTO settings(key,value) VALUES('offline_verified_ms',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(crate::now_ms().to_string()).execute(&self.db.pool).await?;
+        if let Err(error) = self.release_unpinned().await {
+            tracing::warn!(%error, "unpinned local cleanup deferred");
+            report.errors.push("unpinned local cleanup deferred".into());
+        }
         Ok(report)
+    }
+
+    /// Run after reconciliation so queued edits are uploaded before their clean
+    /// local copy is released. Pin changes stay fast and survive a restart.
+    async fn release_unpinned(&self) -> Result<()> {
+        if self.db.setting("storage_mode").await?.as_deref() == Some("mirror") {
+            return Ok(());
+        }
+        let ids: Vec<(String, String)> =
+            sqlx::query_as("SELECT file_id,request_id FROM dehydration_requests ORDER BY rowid")
+                .fetch_all(&self.db.pool)
+                .await?;
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let (mut revision, mut requested) = {
+            let _policy = self.cache.policy_gate.lock().await;
+            (
+                self.selection_revision().await?,
+                crate::offline::Graph::load(&self.db, false)
+                    .await?
+                    .requested_file_ids(),
+            )
+        };
+        let mut released = HashSet::new();
+        let mut completed = Vec::new();
+        for (id, request_id) in ids {
+            let before = self.db.file(&id).await?;
+            if before.review_required
+                || !matches!(before.status.as_str(), "synced" | "online_only")
+                || !self.db.file_operations(&id).await?.is_empty()
+            {
+                continue;
+            }
+            let Some(base) = &before.baseline else {
+                // A metadata-only file has never occupied the backing root.
+                if !before.materialized && before.fingerprint.is_none() {
+                    completed.push((id, request_id));
+                }
+                continue;
+            };
+            if before.relative_path != base.relative_path {
+                continue;
+            }
+            let Some(remote_id) = &before.remote_id else {
+                continue;
+            };
+            let Some(remote) = self.drive.get(remote_id).await? else {
+                continue;
+            };
+            if remote.trashed
+                || remote.unavailable
+                || remote.workspace()
+                || remote.folder()
+                || remote.capabilities.can_download == Some(false)
+                || remote.version != base.remote.version
+                || remote.version.is_empty()
+                || !remote.metadata_eq(&base.remote)
+                || remote.matches(&base.digest) != Some(true)
+                || !self.hydration_in_scope(&remote).await?
+            {
+                continue;
+            }
+            // Hydration takes lifecycle then file; preserve that lock order.
+            let _lifecycle = self.hydration_lifecycle.write().await;
+            let _file = self.files.lock(&id).await;
+            let _guard = self.scanner.gate.lock().await;
+            crate::dehydration::recover(&self.db, &self.scanner.root).await?;
+            let _policy = self.cache.policy_gate.lock().await;
+            let current_revision = self.selection_revision().await?;
+            if revision != current_revision {
+                requested = crate::offline::Graph::load(&self.db, false)
+                    .await?
+                    .requested_file_ids();
+                revision = current_revision;
+            }
+            if requested.contains(&id) {
+                completed.push((id, request_id));
+                continue;
+            }
+            let current = self.db.file(&id).await?;
+            if current.generation != before.generation
+                || current.relative_path != before.relative_path
+                || current.review_required
+                || !self.db.file_operations(&id).await?.is_empty()
+            {
+                continue;
+            }
+            match crate::dehydration::evict(&self.db, &self.scanner.root, &current).await {
+                Ok(true) => {
+                    released.insert(remote_id.clone());
+                    completed.push((id, request_id));
+                }
+                Ok(false) => (),
+                Err(error) => {
+                    crate::dehydration::recover(&self.db, &self.scanner.root).await?;
+                    return Err(error);
+                }
+            }
+        }
+        // CacheStore takes its cache gate before pin policy. Never invert that
+        // order, and recheck pins/active operations before discarding objects.
+        self.cache.remove_for_remote_ids(&released).await?;
+        for (id, request_id) in completed {
+            sqlx::query("DELETE FROM dehydration_requests WHERE file_id=? AND request_id=? AND journal IS NULL")
+                .bind(id)
+                .bind(request_id)
+                .execute(&self.db.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn selection_revision(&self) -> Result<i64> {
+        Ok(
+            sqlx::query_scalar("SELECT coalesce(max(rowid),0) FROM offline_commands")
+                .fetch_one(&self.db.pool)
+                .await?,
+        )
     }
 
     async fn set_status(&self, id: &str, value: &str) -> Result<()> {

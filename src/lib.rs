@@ -7,6 +7,7 @@ pub mod cloud_view;
 pub mod connectivity;
 pub mod dashboard;
 pub mod db;
+mod dehydration;
 pub mod desktop;
 pub mod directory_sync;
 pub mod drive;

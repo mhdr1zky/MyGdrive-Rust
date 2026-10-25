@@ -19,6 +19,79 @@ use tokio_util::sync::CancellationToken;
 
 pub const INTERNAL_PREFIX: &str = ".mygdrive-internal-";
 
+/// Recognizable editor sidecars are local working files, not documents to
+/// upload. Deliberately do not ignore arbitrary .tmp or extensionless files:
+/// Excel also uses anonymous save files, whose names can be real user data.
+pub fn is_editor_temporary_name(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    if !name.starts_with('~') && !name.starts_with(".~") {
+        return false;
+    }
+    let name = name.to_ascii_lowercase();
+    if name
+        .strip_prefix(".~lock.")
+        .and_then(|body| body.strip_suffix('#'))
+        .is_some_and(|body| !body.is_empty())
+    {
+        return true;
+    }
+    if let Some(owner) = name.strip_prefix("~$") {
+        if let Some((stem, extension)) = owner.rsplit_once('.') {
+            if !stem.is_empty()
+                && matches!(
+                    extension,
+                    "doc"
+                        | "docx"
+                        | "docm"
+                        | "dot"
+                        | "dotx"
+                        | "dotm"
+                        | "xls"
+                        | "xlsx"
+                        | "xlsm"
+                        | "xlsb"
+                        | "xlt"
+                        | "xltx"
+                        | "xltm"
+                        | "ppt"
+                        | "pptx"
+                        | "pptm"
+                        | "pot"
+                        | "potx"
+                        | "potm"
+                        | "pps"
+                        | "ppsx"
+                        | "ppsm"
+                )
+            {
+                return true;
+            }
+        }
+    }
+    let Some(scratch) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    // Word's documented temporary document/scratch/OLE names, with the
+    // generated four-digit hexadecimal suffix. Keep unrelated ~*.tmp data.
+    [
+        "~wra", "~wrc", "~wrd", "~wrf", "~wri", "~wrl", "~wrm", "~wro", "~wrs", "~wrv",
+    ]
+    .iter()
+    .filter_map(|prefix| scratch.strip_prefix(*prefix))
+    .any(|suffix| suffix.len() == 4 && suffix.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+fn ignored_watcher_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .starts_with(INTERNAL_PREFIX)
+    }) || (path.file_name().is_some_and(is_editor_temporary_name) && !path.is_dir())
+}
+
 pub fn private_dir(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path)?;
     if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
@@ -163,6 +236,7 @@ pub struct Scanner {
 impl Scanner {
     pub async fn scan(&self) -> Result<()> {
         let guard = self.gate.lock().await;
+        crate::dehydration::recover(&self.db, &self.root).await?;
         if self
             .db
             .operations()
@@ -179,13 +253,9 @@ impl Scanner {
             .await?;
         crate::directory_sync::recover(&self.db, &self.root).await?;
         let files = self.db.materialized_files().await?;
-        let previous: HashMap<String, Fingerprint> = files
+        let previous: HashMap<String, Option<Fingerprint>> = files
             .iter()
-            .filter_map(|f| {
-                f.fingerprint
-                    .clone()
-                    .map(|fp| (f.relative_path.clone(), fp))
-            })
+            .map(|file| (file.relative_path.clone(), file.fingerprint.clone()))
             .collect();
         // Hashing a changed large file must not hold the namespace/scanner gate.
         drop(guard);
@@ -215,8 +285,16 @@ impl Scanner {
                         .to_str()
                         .ok_or_else(|| Error::Unsupported("non UTF-8 path".into()))?
                         .to_string();
+                    // Preserve pre-existing tracked paths: introducing this
+                    // rule must not turn a synced sidecar into a cloud delete.
+                    if is_editor_temporary_name(item.file_name())
+                        && !previous.contains_key(&relative)
+                    {
+                        continue;
+                    }
                     let cached = previous
                         .get(&relative)
+                        .and_then(Option::as_ref)
                         .map(|fp| unchanged_fingerprint(item.path(), fp))
                         .transpose()?
                         .flatten();
@@ -281,8 +359,22 @@ impl Scanner {
                 }
             }
         }
+        // Revalidation above established that these exact fingerprints still
+        // describe the backing tree. Avoid a transaction and SELECT for every
+        // unchanged file; new, edited and moved paths still enter record_local.
+        let unchanged: HashSet<_> = files
+            .iter()
+            .filter(|file| {
+                file.fingerprint
+                    .as_ref()
+                    .is_some_and(|fp| observed.get(&file.relative_path) == Some(fp))
+            })
+            .map(|file| file.relative_path.as_str())
+            .collect();
         for (path, fp) in &observed {
-            self.db.record_local(path, Some(fp.clone())).await?;
+            if !unchanged.contains(path.as_str()) {
+                self.db.record_local(path, Some(fp.clone())).await?;
+            }
         }
         for file in &files {
             if file.materialized
@@ -313,12 +405,10 @@ impl LocalWatcher {
                     if matches!(event.kind, EventKind::Access(_)) {
                         return;
                     }
+                    // A temporary-to-document rename includes the final path,
+                    // so it still wakes the scanner and uploads the saved file.
                     if !event.paths.is_empty()
-                        && event.paths.iter().all(|p| {
-                            p.components().any(|c| {
-                                c.as_os_str().to_string_lossy().starts_with(INTERNAL_PREFIX)
-                            })
-                        })
+                        && event.paths.iter().all(|p| ignored_watcher_path(p))
                     {
                         return;
                     }

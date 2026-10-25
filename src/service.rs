@@ -24,6 +24,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 const VERSION: u32 = 1;
 const MAX_MESSAGE: u64 = 16 * 1024;
+pub const DEFAULT_POLL_SECONDS: u64 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +126,22 @@ struct Control {
     status: ServiceStatus,
     recent: VecDeque<(String, Action)>,
     local_wake: u64,
+}
+#[derive(Clone)]
+struct ReadConnections {
+    control: crate::db::Database,
+    offline: crate::db::Database,
+}
+impl ReadConnections {
+    async fn open(state: &Path, account: &str) -> Result<Self> {
+        let path = state.join("state.sqlite3");
+        Ok(Self {
+            control: crate::db::Database::read_only(&path, account).await?,
+            // A large offline browser snapshot must not borrow the engine's
+            // writer or queue heartbeat/control SQL behind its catalog read.
+            offline: crate::db::Database::read_only(&path, account).await?,
+        })
+    }
 }
 impl Control {
     fn apply(&mut self, request: &Request) -> Reply {
@@ -342,7 +359,7 @@ async fn connection(
     wake: Arc<Notify>,
     state: PathBuf,
     engine: Arc<SyncEngine>,
-    observer: crate::db::Database,
+    readers: ReadConnections,
 ) -> Result<()> {
     if stream.peer_cred()?.uid() != unsafe { libc::geteuid() } {
         return Err(Error::Invalid("IPC peer user rejected".into()));
@@ -360,7 +377,7 @@ async fn connection(
         request.action,
         Action::OfflineList | Action::OfflineSet | Action::Hydrate
     ) {
-        offline_request(&request, &engine, &shared, &wake).await
+        offline_request(&request, &engine, &readers.offline, &shared, &wake).await
     } else {
         // Read the command ledger through a separate WAL reader. Never await
         // the engine's single writer connection while holding the control lock.
@@ -369,7 +386,7 @@ async fn connection(
         } else {
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM offline_commands WHERE request_id=?")
                 .bind(&request.request_id)
-                .fetch_one(&observer.pool)
+                .fetch_one(&readers.control.pool)
                 .await?
         };
         let mut c = shared.lock().await;
@@ -402,6 +419,7 @@ async fn connection(
 async fn offline_request(
     request: &Request,
     engine: &SyncEngine,
+    reader: &crate::db::Database,
     shared: &Mutex<Control>,
     wake: &Notify,
 ) -> Reply {
@@ -424,7 +442,9 @@ async fn offline_request(
         }
         match (&request.action, &request.offline) {
             (Action::OfflineList, Some(crate::offline::Request::List { parent, offset })) => {
-                Ok((Some(engine.offline_page(parent, *offset).await?), false))
+                let mut page = SyncEngine::offline_page_from(reader, parent, *offset).await?;
+                page.service_paused = shared.lock().await.status.paused;
+                Ok((Some(page), false))
             }
             (Action::OfflineSet, Some(crate::offline::Request::Set { target, pinned })) => {
                 let duplicate = engine
@@ -519,6 +539,23 @@ fn error_kind(error: &Error) -> String {
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_else(|| "service_error".into())
 }
+
+fn next_poll_deadline(
+    started: Instant,
+    finished: Instant,
+    delay_seconds: u64,
+    success: bool,
+) -> Instant {
+    let delay = Duration::from_secs(delay_seconds);
+    if success {
+        // Keep the configured cadence instead of adding another full interval
+        // after every check. Long cycles still get a short idle period.
+        (started + delay).max(finished + Duration::from_millis(500))
+    } else {
+        // Network/authentication failures keep the full retry backoff.
+        finished + delay
+    }
+}
 async fn schedule(
     engine: Arc<SyncEngine>,
     shared: Arc<Mutex<Control>>,
@@ -565,7 +602,9 @@ async fn schedule(
             }
         };
         if start {
+            let cycle_started = Instant::now();
             let result = engine.sync_once().await;
+            let success = result.as_ref().is_ok_and(|report| report.errors.is_empty());
             let mut c = shared.lock().await;
             c.status.cycle_active = false;
             c.status.last_sync_finished_ms = Some(now_ms());
@@ -628,7 +667,7 @@ async fn schedule(
             // Large inventory snapshots are gone here. Give their unused heap
             // pages back outside filesystem/DB locks, with a process-wide cap.
             let _ = tokio::task::spawn_blocking(crate::memory::release_unused).await;
-            due = Instant::now() + Duration::from_secs(delay);
+            due = next_poll_deadline(cycle_started, Instant::now(), delay, success);
             continue;
         }
         let paused = shared.lock().await.status.paused;
@@ -704,8 +743,7 @@ pub async fn run(
     }));
     engine.recover_moves().await?;
     engine.recover_displaced().await?;
-    let observer =
-        crate::db::Database::read_only(&state.join("state.sqlite3"), &engine.db.account).await?;
+    let readers = ReadConnections::open(state, &engine.db.account).await?;
     let watcher = LocalWatcher::start(&engine.scanner.root)?;
     let watcher_stop = CancellationToken::new();
     let scanner = engine.scanner.clone();
@@ -744,12 +782,12 @@ pub async fn run(
             result = &mut worker => {worker_result=Some(result); shared.lock().await.status.last_error=Some("local watcher stopped".into()); failure=Some(Error::Invalid("local watcher stopped".into())); break;},
             Some(_) = clients.join_next(), if !clients.is_empty()=>{},
             result = listener.accept() => match result {
-                Ok((stream,_)) => if let Ok(permit)=permits.clone().try_acquire_owned() { let c=shared.clone();let w=wake.clone(); let client_state=state.to_path_buf(); let client_engine=engine.clone(); let client_observer=observer.clone(); clients.spawn(async move {let _permit=permit;let _=tokio::time::timeout(Duration::from_secs(600),connection(stream,c,w,client_state,client_engine,client_observer)).await;}); },
+                Ok((stream,_)) => if let Ok(permit)=permits.clone().try_acquire_owned() { let c=shared.clone();let w=wake.clone(); let client_state=state.to_path_buf(); let client_engine=engine.clone(); let client_readers=readers.clone(); clients.spawn(async move {let _permit=permit;let _=tokio::time::timeout(Duration::from_secs(600),connection(stream,c,w,client_state,client_engine,client_readers)).await;}); },
                 Err(e)=>{failure=Some(e.into());break;}
             },
             _ = heartbeat.tick() => {
-                let pending_ops=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM sync_operations WHERE stage NOT IN ('done','cancelled')").fetch_one(&observer.pool).await;
-                let pending_files=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM files WHERE sync_status NOT IN ('synced','online_only','tombstone')").fetch_one(&observer.pool).await;
+                let pending_ops=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM sync_operations WHERE stage NOT IN ('done','cancelled')").fetch_one(&readers.control.pool).await;
+                let pending_files=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM files WHERE sync_status NOT IN ('synced','online_only','tombstone')").fetch_one(&readers.control.pool).await;
                 let snapshot = {
                     let mut c = shared.lock().await;
                     c.status.heartbeat_at_ms = now_ms();
@@ -806,4 +844,118 @@ pub async fn run_owned(
     stop: CancellationToken,
 ) -> Result<()> {
     run(engine, &state, config, paused, stop).await
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use super::*;
+
+    async fn fixture() -> (tempfile::TempDir, crate::db::Database, ReadConnections) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        let db = crate::db::Database::open(&temp.path().join("state.sqlite3"), "test")
+            .await
+            .unwrap();
+        db.bind("root", root.to_str().unwrap()).await.unwrap();
+        db.bind("folder", "root").await.unwrap();
+        let readers = ReadConnections::open(temp.path(), "test").await.unwrap();
+        (temp, db, readers)
+    }
+
+    #[tokio::test]
+    async fn offline_list_does_not_wait_for_writer_or_control_reader_connections() {
+        let (_temp, db, readers) = fixture().await;
+        let writer = db.pool.acquire().await.unwrap();
+        let control = readers.control.pool.acquire().await.unwrap();
+        let page = tokio::time::timeout(
+            Duration::from_millis(500),
+            SyncEngine::offline_page_from(&readers.offline, "root", 0),
+        )
+        .await
+        .expect("offline listing borrowed a busy writer or control connection")
+        .unwrap();
+        assert_eq!(page.current.key, "root");
+        assert!(page.children.is_empty());
+        drop(control);
+        drop(writer);
+    }
+
+    #[tokio::test]
+    async fn offline_snapshot_allows_writer_commits_and_retains_snapshot_consistency() {
+        let (_temp, db, readers) = fixture().await;
+        let mut snapshot = readers.offline.pool.begin().await.unwrap();
+        let before: i64 = sqlx::query_scalar("SELECT count(*) FROM offline_selections")
+            .fetch_one(&mut *snapshot)
+            .await
+            .unwrap();
+        assert_eq!(before, 0);
+        tokio::time::timeout(Duration::from_millis(500), async {
+            sqlx::query("INSERT INTO offline_selections(target,pinned) VALUES('root',1)")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                readers.control.setting("account").await.unwrap().as_deref(),
+                Some("test")
+            );
+        })
+        .await
+        .expect("offline snapshot blocked engine writes or heartbeat/control reads");
+        let during: i64 = sqlx::query_scalar("SELECT count(*) FROM offline_selections")
+            .fetch_one(&mut *snapshot)
+            .await
+            .unwrap();
+        assert_eq!(during, before, "reader mixed separate database snapshots");
+        snapshot.rollback().await.unwrap();
+        let page = SyncEngine::offline_page_from(&readers.offline, "root", 0)
+            .await
+            .unwrap();
+        assert!(page.current.selected);
+    }
+
+    #[tokio::test]
+    async fn dedicated_readers_reject_account_mismatch_and_database_writes() {
+        let (temp, _db, readers) = fixture().await;
+        assert!(ReadConnections::open(temp.path(), "another-account")
+            .await
+            .is_err());
+        assert!(
+            sqlx::query("UPDATE settings SET value='changed' WHERE key='account'")
+                .execute(&readers.offline.pool)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            readers.offline.setting("account").await.unwrap().as_deref(),
+            Some("test")
+        );
+    }
+}
+
+#[cfg(test)]
+mod cadence_tests {
+    use super::*;
+
+    #[test]
+    fn successful_checks_keep_the_start_cadence_and_long_checks_still_rest() {
+        let start = Instant::now();
+        assert_eq!(
+            next_poll_deadline(start, start + Duration::from_secs(3), 10, true),
+            start + Duration::from_secs(10)
+        );
+        assert_eq!(
+            next_poll_deadline(start, start + Duration::from_secs(12), 10, true),
+            start + Duration::from_millis(12500)
+        );
+    }
+
+    #[test]
+    fn failed_checks_wait_the_full_backoff_after_completion() {
+        let start = Instant::now();
+        assert_eq!(
+            next_poll_deadline(start, start + Duration::from_secs(12), 60, false),
+            start + Duration::from_secs(72)
+        );
+    }
 }
