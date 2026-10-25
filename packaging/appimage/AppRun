@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+app_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export LD_LIBRARY_PATH="$app_dir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export XDG_DATA_DIRS="$app_dir/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export GSETTINGS_SCHEMA_DIR="$app_dir/usr/share/glib-2.0/schemas"
+loader_cache=$(mktemp "${TMPDIR:-/tmp}/mygdrive-pixbuf.XXXXXXXX")
+trap 'rm -f -- "$loader_cache"' EXIT
+if [ -x "$app_dir/usr/bin/gdk-pixbuf-query-loaders" ]; then
+    "$app_dir/usr/bin/gdk-pixbuf-query-loaders" "$app_dir"/usr/lib/gdk-pixbuf-2.0/loaders/*.so > "$loader_cache"
+fi
+export GDK_PIXBUF_MODULE_FILE="$loader_cache"
+export GSK_RENDERER="${GSK_RENDERER:-cairo}"
+command=mygdrive-desktop
+case "${1:-}" in
+    --sync) command=mygdrive-sync; shift ;;
+    --mount) command=mygdrive-mount; shift ;;
+esac
+"$app_dir/usr/bin/$command" "$@" &
+child=$!
+trap 'kill -TERM "$child" 2>/dev/null || true' HUP INT TERM
+result=0
+wait "$child" || result=$?
+exit "$result"

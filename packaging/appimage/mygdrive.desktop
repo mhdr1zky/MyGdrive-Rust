@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MyGdrive Rust
+Comment=Google Drive sync and offline files
+Exec=mygdrive-desktop
+Icon=mygdrive
+Terminal=false
+Categories=Network;FileTransfer;

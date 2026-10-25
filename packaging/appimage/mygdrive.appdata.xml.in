@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.mhdr1zky.MyGdrive</id>
+  <name>MyGdrive Rust</name>
+  <summary>Synchronize Google Drive and choose offline files</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description><p>A Linux desktop Google Drive client with local folder synchronization, offline choices, activity monitoring, and an optional virtual drive.</p></description>
+  <launchable type="desktop-id">mygdrive.desktop</launchable>
+  <url type="homepage">https://github.com/mhdr1zky/MyGdrive-Rust</url>
+  <releases><release version="@VERSION@" date="2026-10-25"/></releases>
+</component>

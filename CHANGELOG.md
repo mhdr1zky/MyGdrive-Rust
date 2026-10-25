@@ -2,8 +2,9 @@
 
 ## v1.0.1 — 25 Oktober 2026
 
-- Paket Flatpak x86_64 untuk dashboard, sinkronisasi folder lokal, dan pilihan
-  offline. Mount FUSE, menu Thunar, dan autostart tetap memakai paket native.
+- Paket AppImage x86_64 untuk dashboard, sinkronisasi folder lokal, pilihan
+  offline, dan CLI/helper mount FUSE. GTK dibundel; integrasi Thunar tetap
+  memerlukan setup native. Autostart menyimpan lokasi AppImage yang tetap.
 - Pin file/subfolder mandiri, turunan folder termasuk anak baru dan direktori
   kosong, serta informasi eksplisit ketika layanan sedang dijeda.
 - Lock Office/LibreOffice dan scratch Word yang dikenali tidak masuk antrean
