@@ -46,9 +46,11 @@ build_dir="$work_dir/app"
 # the packing SDK. Both executables are built from Cargo.lock on Ubuntu 24.04.
 flatpak build-init --arch="$architecture" "$build_dir" "$app_id" "$runtime" "$runtime" "$runtime_version"
 for binary in mygdrive-sync mygdrive-desktop; do
-    install -Dm755 "$target_dir/release/$binary" "$build_dir/files/bin/$binary"
+    install -Dm755 "$target_dir/release/$binary" "$build_dir/files/libexec/mygdrive/$binary"
 done
-install -Dm755 packaging/flatpak/run-desktop.sh "$build_dir/files/bin/mygdrive"
+for launcher in mygdrive mygdrive-desktop mygdrive-sync; do
+    install -Dm755 packaging/flatpak/run-desktop.sh "$build_dir/files/bin/$launcher"
+done
 install -Dm644 "packaging/flatpak/$app_id.desktop" "$build_dir/files/share/applications/$app_id.desktop"
 install -Dm644 assets/mygdrive.svg "$build_dir/files/share/icons/hicolor/scalable/apps/$app_id.svg"
 install -d "$build_dir/files/share/metainfo" "$build_dir/files/share/doc/mygdrive-rust"
@@ -67,7 +69,7 @@ done
 flatpak build-finish --command=mygdrive --share=network --share=ipc \
     --socket=wayland --socket=fallback-x11 --device=dri --filesystem=home \
     '--own-name=io.mygdrive.*' --talk-name=org.kde.StatusNotifierWatcher \
-    --env=GTK_USE_PORTAL=1 --env=XDG_DATA_HOME=/var/data "$build_dir"
+    --env=GTK_USE_PORTAL=1 "$build_dir"
 # Verify the executables against the actual GNOME runtime before exporting.
 env -u LD_LIBRARY_PATH flatpak build "$build_dir" /app/bin/mygdrive-sync --version
 env -u LD_LIBRARY_PATH flatpak build "$build_dir" /app/bin/mygdrive-desktop --help >/dev/null
