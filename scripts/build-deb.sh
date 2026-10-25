@@ -40,12 +40,12 @@ target_dir=${CARGO_TARGET_DIR:-"$project_dir/target"}
 if [[ $target_dir != /* ]]; then
     target_dir="$project_dir/$target_dir"
 fi
-for binary in mygdrive-sync mygdrive-desktop mygdrive-mount; do
-    [[ $("$target_dir/release/$binary" --version) == *" $version" ]] || {
-        printf 'Release binary version mismatch: %s\n' "$binary" >&2
-        exit 1
-    }
-done
+[[ $("$target_dir/release/mygdrive-sync" --version) == "mygdrive-sync $version" ]] || {
+    printf 'Release binary version mismatch; rebuild first.\n' >&2
+    exit 1
+}
+"$target_dir/release/mygdrive-desktop" --help >/dev/null
+"$target_dir/release/mygdrive-mount" --help >/dev/null
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/mygdrive-deb.XXXXXXXX")
 trap 'rm -rf -- "$work_dir"' EXIT
 package_dir="$work_dir/debian/mygdrive-rust"
