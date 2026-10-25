@@ -329,7 +329,9 @@ async fn run() -> Result<()> {
         }
         Command::Unpin { file_id } => {
             engine.set_available_offline(&file_id, false).await?;
-            println!("Offline pin removed.");
+            println!(
+                "Offline pin removed; safe local cleanup queued for the next successful sync."
+            );
         }
         Command::CachePrune { max_bytes } => println!(
             "{}",
@@ -347,7 +349,7 @@ async fn run() -> Result<()> {
                 drive_folder,
                 interval_seconds: interval
                     .or_else(|| saved.as_ref().map(|c| c.interval_seconds))
-                    .unwrap_or(15),
+                    .unwrap_or(service::DEFAULT_POLL_SECONDS),
                 cache_max_bytes: cache_max_bytes
                     .or_else(|| saved.as_ref().and_then(|c| c.cache_max_bytes)),
             };

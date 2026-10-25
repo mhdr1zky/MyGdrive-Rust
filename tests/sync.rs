@@ -34,6 +34,8 @@ struct FakeDrive {
     release_get: tokio::sync::Notify,
     download_calls: AtomicUsize,
     get_calls: Mutex<Vec<String>>,
+    get_override: Mutex<Option<(String, usize, Option<RemoteFile>)>>,
+    hold_get_after: Mutex<Option<(String, usize)>>,
     hold_download: AtomicBool,
     fail_download_midstream: AtomicBool,
     download_entered: tokio::sync::Notify,
@@ -55,6 +57,8 @@ impl FakeDrive {
             release_get: tokio::sync::Notify::new(),
             download_calls: AtomicUsize::new(0),
             get_calls: Mutex::new(Vec::new()),
+            get_override: Mutex::new(None),
+            hold_get_after: Mutex::new(None),
             hold_download: AtomicBool::new(false),
             fail_download_midstream: AtomicBool::new(false),
             download_entered: tokio::sync::Notify::new(),
@@ -172,6 +176,34 @@ impl DriveClient for FakeDrive {
         if self.hold_get.swap(false, Ordering::SeqCst) {
             self.get_entered.notify_one();
             self.release_get.notified().await;
+        }
+        let targeted_hold = {
+            let mut hold = self.hold_get_after.lock().unwrap();
+            match hold.as_mut() {
+                Some((target, remaining)) if target == id => {
+                    if *remaining == 0 {
+                        hold.take();
+                        true
+                    } else {
+                        *remaining -= 1;
+                        false
+                    }
+                }
+                _ => false,
+            }
+        };
+        if targeted_hold {
+            self.get_entered.notify_one();
+            self.release_get.notified().await;
+        }
+        let mut override_get = self.get_override.lock().unwrap();
+        if let Some((target, remaining, _)) = override_get.as_mut() {
+            if target == id {
+                if *remaining == 0 {
+                    return Ok(override_get.take().unwrap().2);
+                }
+                *remaining -= 1;
+            }
         }
         Ok(self.files.lock().unwrap().get(id).map(|(f, _)| f.clone()))
     }
@@ -774,6 +806,168 @@ async fn local_rename_and_edit_converge_on_original_remote_identity() {
     let report = engine.sync_once().await.unwrap();
     assert!(report.errors.is_empty(), "{report:?}");
     assert_eq!(report.completed, 0);
+}
+
+#[tokio::test]
+async fn unpublished_create_then_delete_finishes_offline_and_recreated_path_still_uploads() {
+    let fixture = Fixture::new(true);
+    let engine = fixture.engine().await;
+    std::fs::write(fixture.root.join("brief.txt"), b"short-lived file").unwrap();
+    engine.scanner.scan().await.unwrap();
+    let file = engine.db.files().await.unwrap().remove(0);
+    assert_eq!(file.status, "new_local");
+    fixture.drive.offline.store(true, Ordering::SeqCst);
+    std::fs::remove_file(fixture.root.join("brief.txt")).unwrap();
+    engine.scanner.scan().await.unwrap();
+    let retired = engine.db.file(&file.id).await.unwrap();
+    assert_eq!(retired.status, "tombstone");
+    assert!(retired.fingerprint.is_none());
+    assert!(retired.remote_id.is_none());
+    assert!(engine.db.operations().await.unwrap().is_empty());
+    std::fs::write(
+        mygdrive_sync::service::config_path(&fixture.state),
+        serde_json::to_vec(&service_config(&fixture)).unwrap(),
+    )
+    .unwrap();
+    let activity = mygdrive_sync::dashboard::read_activity_page(&fixture.state)
+        .await
+        .unwrap();
+    assert_eq!(activity.pending_files, 0);
+    assert_eq!(activity.pending_deletions, 0);
+    assert!(activity.items.iter().all(|item| !item.pending));
+    engine.scanner.scan().await.unwrap();
+    assert_eq!(engine.db.file(&file.id).await.unwrap().status, "tombstone");
+    assert_eq!(fixture.drive.files.lock().unwrap().len(), 1);
+
+    std::fs::write(fixture.root.join("brief.txt"), b"new intended contents").unwrap();
+    engine.scanner.scan().await.unwrap();
+    assert_eq!(engine.db.file(&file.id).await.unwrap().status, "new_local");
+    fixture.drive.offline.store(false, Ordering::SeqCst);
+    let report = engine.sync_once().await.unwrap();
+    assert!(report.errors.is_empty(), "{report:?}");
+    let recreated = engine.db.file(&file.id).await.unwrap();
+    assert_eq!(recreated.status, "synced");
+    assert_eq!(
+        fixture.drive.data(recreated.remote_id.as_deref().unwrap()),
+        b"new intended contents"
+    );
+    assert_eq!(fixture.drive.files.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn legacy_unpublished_deletions_retire_but_active_journals_and_reviews_are_preserved() {
+    let fixture = Fixture::new(true);
+    let engine = fixture.engine().await;
+    for name in [".~lock.Legacy.docx#", "pending.txt", "review.txt"] {
+        std::fs::write(fixture.root.join(name), b"tracked earlier").unwrap();
+        engine
+            .db
+            .record_local(name, Some(fingerprint(&fixture.root.join(name)).unwrap()))
+            .await
+            .unwrap();
+    }
+    let files = engine.db.files().await.unwrap();
+    let mut legacy = files
+        .iter()
+        .find(|f| f.relative_path.starts_with(".~lock."))
+        .unwrap()
+        .clone();
+    let pending = files
+        .iter()
+        .find(|f| f.relative_path == "pending.txt")
+        .unwrap();
+    let mut review = files
+        .iter()
+        .find(|f| f.relative_path == "review.txt")
+        .unwrap()
+        .clone();
+    let mut operation = engine
+        .db
+        .operation(&Operation::new(pending, "create", None))
+        .await
+        .unwrap();
+    legacy.fingerprint = None;
+    legacy.status = "deleted_local".into();
+    engine.db.save_file(&legacy).await.unwrap();
+    review.review_required = true;
+    review.status = "recovery_review".into();
+    engine.db.save_file(&review).await.unwrap();
+    for file in &files {
+        std::fs::remove_file(fixture.root.join(&file.relative_path)).unwrap();
+    }
+    engine.scanner.scan().await.unwrap();
+    let repaired = engine.db.file(&legacy.id).await.unwrap();
+    assert_eq!(repaired.status, "tombstone");
+    assert_eq!(repaired.generation, legacy.generation);
+    assert_eq!(
+        engine.db.file(&pending.id).await.unwrap().status,
+        "deleted_local"
+    );
+    assert_eq!(
+        engine.db.file(&review.id).await.unwrap().status,
+        "recovery_review"
+    );
+    operation.stage = "cancelled".into();
+    engine.db.save_operation(&operation).await.unwrap();
+    engine.scanner.scan().await.unwrap();
+    assert_eq!(
+        engine.db.file(&pending.id).await.unwrap().status,
+        "tombstone"
+    );
+    assert_eq!(
+        engine.db.file(&review.id).await.unwrap().status,
+        "recovery_review"
+    );
+}
+
+#[tokio::test]
+async fn unpublished_deletion_after_lost_create_response_recovers_cloud_identity_before_trash() {
+    let fixture = Fixture::new(true);
+    let engine = fixture.engine().await;
+    std::fs::write(
+        fixture.root.join("new.txt"),
+        b"created before response was lost",
+    )
+    .unwrap();
+    fixture
+        .drive
+        .fail_after_create
+        .store(true, Ordering::SeqCst);
+    assert_eq!(engine.sync_once().await.unwrap().errors.len(), 1);
+    let file = engine.db.files().await.unwrap().remove(0);
+    let operation = engine.db.operations().await.unwrap().remove(0);
+    let remote_id = operation.target_remote_id.clone().unwrap();
+    assert!(file.remote_id.is_none());
+    std::fs::remove_file(fixture.root.join("new.txt")).unwrap();
+    engine.scanner.scan().await.unwrap();
+    assert_eq!(
+        engine.db.file(&file.id).await.unwrap().status,
+        "deleted_local"
+    );
+    let mut operation = operation;
+    operation.next_retry_ms = 0;
+    engine.db.save_operation(&operation).await.unwrap();
+    drop(engine);
+    let engine = fixture.engine().await;
+    for _ in 0..3 {
+        let report = engine.sync_once().await.unwrap();
+        assert!(report.errors.is_empty(), "{report:?}");
+    }
+    let retired = engine.db.file(&file.id).await.unwrap();
+    assert_eq!(retired.status, "tombstone");
+    assert_eq!(retired.remote_id.as_deref(), Some(remote_id.as_str()));
+    assert!(
+        fixture
+            .drive
+            .get(&remote_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .trashed
+    );
+    assert_eq!(fixture.drive.files.lock().unwrap().len(), 2);
+    assert!(!fixture.root.join("new.txt").exists());
+    assert!(engine.db.operations().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1532,7 +1726,7 @@ async fn schema_one_cache_records_migrate_without_losing_data() {
         .fetch_one(&db.pool)
         .await
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
 }
 
 #[tokio::test]
@@ -2614,6 +2808,235 @@ async fn offline_folder_rule_inherits_nested_and_future_children_and_survives_re
     assert_eq!(f.drive.data("child"), b"edited offline");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn standalone_file_and_subfolder_pins_download_through_live_controller_and_thunar() {
+    use mygdrive_sync::{
+        offline_controller,
+        service::{self, Action, Request},
+        thunar,
+    };
+    let f = Fixture::new(true);
+    put_folder(&f.drive, "parent", "Parent", "root");
+    put_folder(&f.drive, "selected", "Selected", "parent");
+    put_folder(&f.drive, "nested", "Nested", "selected");
+    put_folder(&f.drive, "empty", "Empty", "nested");
+    for (id, name, parent) in [
+        ("solo", "solo.txt", "parent"),
+        ("nested-file", "inside.txt", "nested"),
+        ("sibling", "leave-online.txt", "parent"),
+    ] {
+        f.drive.put(id, name, id.as_bytes());
+        move_under(&f.drive, id, parent);
+    }
+    let e = Arc::new(online_engine(&f).await);
+    e.sync_once().await.unwrap();
+    let state = f.state.clone();
+    let task = tokio::spawn(service::run_owned(
+        e.clone(),
+        state.clone(),
+        service_config(&f),
+        false,
+        CancellationToken::new(),
+    ));
+    let initial = service_wait(&state, |s| s.cycles_finished > 0 && !s.cycle_active).await;
+    offline_controller::select(&state, "r:solo", true)
+        .await
+        .unwrap();
+    service_wait(&state, |s| {
+        s.cycles_finished > initial.cycles_finished
+            && !s.cycle_active
+            && f.root.join("Parent/solo.txt").exists()
+    })
+    .await;
+    assert_eq!(
+        std::fs::read(f.root.join("Parent/solo.txt")).unwrap(),
+        b"solo"
+    );
+    assert!(!f.root.join("Parent/Selected/Nested/inside.txt").exists());
+    assert!(!f.root.join("Parent/leave-online.txt").exists());
+    let (page, live) = offline_controller::browse(&state, "r:parent", 0)
+        .await
+        .unwrap();
+    assert!(live);
+    assert!(!page.service_paused);
+    assert!(!page.current.selected && !page.current.effective);
+    let solo = page
+        .children
+        .iter()
+        .find(|node| node.key == "r:solo")
+        .unwrap();
+    assert!(solo.selected && solo.effective && !solo.inherited);
+    assert!(!e.offline_page("root", 0).await.unwrap().current.effective);
+
+    let mount = f.root.parent().unwrap().join("online");
+    std::fs::create_dir(&mount).unwrap();
+    let before_folder = service::send(&state, &Request::new(Action::Status))
+        .await
+        .unwrap()
+        .status;
+    thunar::set_paths(
+        &state,
+        "test",
+        Some(&mount),
+        &[mount.join("Parent/Selected")],
+        true,
+    )
+    .await
+    .unwrap();
+    service_wait(&state, |s| {
+        s.cycles_finished > before_folder.cycles_finished
+            && !s.cycle_active
+            && f.root.join("Parent/Selected/Nested/inside.txt").exists()
+    })
+    .await;
+    assert!(f.root.join("Parent/Selected/Nested/Empty").is_dir());
+    let (selected, _) = offline_controller::browse(&state, "r:selected", 0)
+        .await
+        .unwrap();
+    assert!(selected.current.selected && selected.current.effective && !selected.current.inherited);
+    let (nested, _) = offline_controller::browse(&state, "r:nested", 0)
+        .await
+        .unwrap();
+    assert!(nested.current.inherited && nested.current.effective);
+    assert!(
+        !e.offline_page("r:parent", 0)
+            .await
+            .unwrap()
+            .current
+            .effective
+    );
+    assert!(!e.offline_page("root", 0).await.unwrap().current.effective);
+    assert!(!f.root.join("Parent/leave-online.txt").exists());
+
+    put_folder(&f.drive, "future-empty", "Future empty", "empty");
+    f.drive.put("future", "future.txt", b"future descendant");
+    move_under(&f.drive, "future", "nested");
+    let before_new = service::send(&state, &Request::new(Action::Status))
+        .await
+        .unwrap()
+        .status;
+    service::send(&state, &Request::new(Action::SyncNow))
+        .await
+        .unwrap();
+    service_wait(&state, |s| {
+        s.cycles_finished > before_new.cycles_finished
+            && !s.cycle_active
+            && f.root.join("Parent/Selected/Nested/future.txt").exists()
+    })
+    .await;
+    assert!(f
+        .root
+        .join("Parent/Selected/Nested/Empty/Future empty")
+        .is_dir());
+    assert_eq!(
+        std::fs::read(f.root.join("Parent/Selected/Nested/future.txt")).unwrap(),
+        b"future descendant"
+    );
+    assert!(!f.root.join("Parent/leave-online.txt").exists());
+    assert_eq!(f.drive.download_calls.load(Ordering::SeqCst), 3);
+    service::send(&state, &Request::new(Action::Shutdown))
+        .await
+        .unwrap();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn standalone_offline_browser_worker_reports_pause_and_downloads_selection_after_resume() {
+    use mygdrive_sync::{
+        offline_controller::{self, Command, Event, Job},
+        service::{self, Action, Request},
+    };
+    let f = Fixture::new(true);
+    put_folder(&f.drive, "parent", "Parent", "root");
+    put_folder(&f.drive, "selected", "Selected", "parent");
+    f.drive.put("one", "one.txt", b"standalone folder content");
+    move_under(&f.drive, "one", "selected");
+    let e = Arc::new(online_engine(&f).await);
+    e.sync_once().await.unwrap();
+    let state = f.state.clone();
+    let task = tokio::spawn(service::run_owned(
+        e.clone(),
+        state.clone(),
+        service_config(&f),
+        true,
+        CancellationToken::new(),
+    ));
+    service_wait(&state, |s| s.paused).await;
+    let controller = offline_controller::spawn(state.clone()).unwrap();
+    controller
+        .commands
+        .send(Job {
+            command: Command::Set {
+                target: "r:selected".into(),
+                pinned: true,
+                parent: "r:parent".into(),
+                offset: 0,
+            },
+            revision: 77,
+        })
+        .await
+        .unwrap();
+    let page = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match controller.events.try_recv() {
+                Ok(Event::Page {
+                    page,
+                    live,
+                    revision: 77,
+                }) => {
+                    assert!(live);
+                    break page;
+                }
+                Ok(Event::Error {
+                    message,
+                    revision: 77,
+                }) => panic!("{message}"),
+                _ => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(page.service_paused);
+    assert!(!page.current.effective);
+    let selected = page
+        .children
+        .iter()
+        .find(|node| node.key == "r:selected")
+        .unwrap();
+    assert!(selected.selected && selected.effective && !selected.inherited);
+    assert!(!f.root.join("Parent/Selected/one.txt").exists());
+    service::send(&state, &Request::new(Action::Resume))
+        .await
+        .unwrap();
+    service_wait(&state, |s| {
+        !s.paused
+            && s.cycles_finished > 0
+            && !s.cycle_active
+            && f.root.join("Parent/Selected/one.txt").exists()
+    })
+    .await;
+    let (ready, live) = offline_controller::browse(&state, "r:selected", 0)
+        .await
+        .unwrap();
+    assert!(live && !ready.service_paused);
+    assert_eq!(ready.current.counts.ready, 1);
+    assert!(
+        !e.offline_page("r:parent", 0)
+            .await
+            .unwrap()
+            .current
+            .effective
+    );
+    assert!(!e.offline_page("root", 0).await.unwrap().current.effective);
+    controller.stop();
+    drop(controller);
+    service::send(&state, &Request::new(Action::Shutdown))
+        .await
+        .unwrap();
+    task.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn offline_readiness_rechecks_local_identity_and_reports_unsupported_content() {
     let f = Fixture::new(true);
@@ -2844,7 +3267,50 @@ async fn offline_pagination_and_schema_two_upgrade_preserve_materialized_files()
         .put("new", "metadata-only.txt", b"not downloaded");
     e.sync_once().await.unwrap();
     assert!(!legacy.root.join("metadata-only.txt").exists());
-    assert!(legacy.root.join("note.txt").exists());
+    assert!(!legacy.root.join("note.txt").exists());
+    assert_eq!(legacy.drive.data("original"), b"baseline");
+    assert!(!legacy.drive.get("original").await.unwrap().unwrap().trashed);
+}
+
+#[tokio::test]
+async fn schema_three_upgrade_adds_dehydration_queue_and_preserves_downloaded_pins() {
+    let f = Fixture::new(true);
+    f.drive.put("one", "one.txt", b"existing pinned content");
+    let e = online_engine(&f).await;
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+        .await
+        .unwrap();
+    e.sync_once().await.unwrap();
+    let original = e.db.by_remote("one").await.unwrap().unwrap();
+    sqlx::raw_sql("DROP TABLE dehydration_requests; PRAGMA user_version=3;")
+        .execute(&e.db.pool)
+        .await
+        .unwrap();
+    drop(e);
+    let e = online_engine(&f).await;
+    let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+        .fetch_one(&e.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(version, 4);
+    assert_eq!(
+        e.db.by_remote("one").await.unwrap().unwrap().id,
+        original.id
+    );
+    assert_eq!(
+        std::fs::read(f.root.join("one.txt")).unwrap(),
+        b"existing pinned content"
+    );
+    assert!(e.offline_page("root", 0).await.unwrap().children[0].effective);
+    assert_eq!(f.drive.download_calls.load(Ordering::SeqCst), 1);
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+        .await
+        .unwrap();
+    let report = e.sync_once().await.unwrap();
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert!(!f.root.join("one.txt").exists());
+    assert_eq!(f.drive.data("one"), b"existing pinned content");
 }
 
 #[tokio::test]
@@ -2877,6 +3343,884 @@ async fn unpin_cancels_unstarted_download_and_repin_does_not_reuse_cancelled_job
         std::fs::read(f.root.join("one.txt")).unwrap(),
         b"dirty offline"
     );
+}
+
+#[tokio::test]
+async fn unpin_frees_clean_content_and_target_cache_but_retains_metadata_for_reopen() {
+    let f = Fixture::new(true);
+    f.drive.put("one", "one.txt", b"release these bytes");
+    f.drive.put("other", "other.txt", b"keep this opened cache");
+    let e = online_engine(&f).await;
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+        .await
+        .unwrap();
+    e.sync_once().await.unwrap();
+    let original = e.db.by_remote("one").await.unwrap().unwrap();
+    let other = e.db.by_remote("other").await.unwrap().unwrap();
+    e.hydrate(&other.id).await.unwrap();
+    let downloads = f.drive.download_calls.load(Ordering::SeqCst);
+    let request = uuid::Uuid::new_v4().to_string();
+    e.offline_select(&request, "r:one", false).await.unwrap();
+    let report = e.sync_once().await.unwrap();
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert!(!f.root.join("one.txt").exists());
+    assert_eq!(
+        std::fs::read(f.root.join("other.txt")).unwrap(),
+        b"keep this opened cache"
+    );
+    let released = e.db.by_remote("one").await.unwrap().unwrap();
+    assert_eq!(released.id, original.id);
+    assert_eq!(released.remote_id, original.remote_id);
+    assert_eq!(released.status, "online_only");
+    assert!(!released.materialized);
+    assert!(released.fingerprint.is_none());
+    assert!(released.baseline.is_some());
+    assert_eq!(f.drive.data("one"), b"release these bytes");
+    assert!(!f.drive.get("one").await.unwrap().unwrap().trashed);
+    let objects = e.db.cached_objects().await.unwrap();
+    assert!(!objects
+        .iter()
+        .any(|o| o.remote_id.as_deref() == Some("one")));
+    assert!(objects
+        .iter()
+        .any(|o| o.remote_id.as_deref() == Some("other")));
+    assert!(std::fs::read_dir(&f.root).unwrap().all(|entry| !entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with(mygdrive_sync::local::INTERNAL_PREFIX)));
+
+    // A subsequent scanner/cycle must not interpret dehydration as a Drive deletion.
+    e.scanner.scan().await.unwrap();
+    e.sync_once().await.unwrap();
+    assert!(!f.drive.get("one").await.unwrap().unwrap().trashed);
+    e.hydrate(&original.id).await.unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("one.txt")).unwrap(),
+        b"release these bytes"
+    );
+    assert_eq!(f.drive.download_calls.load(Ordering::SeqCst), downloads + 1);
+    assert!(
+        !e.offline_page("root", 0)
+            .await
+            .unwrap()
+            .children
+            .iter()
+            .find(|n| n.key == "r:one")
+            .unwrap()
+            .effective
+    );
+
+    // Replaying the completed IPC request cannot evict a later intentional open.
+    assert!(e.offline_select(&request, "r:one", false).await.unwrap());
+    e.sync_once().await.unwrap();
+    assert!(f.root.join("one.txt").exists());
+}
+
+#[tokio::test]
+async fn unpin_folder_frees_descendants_but_keeps_explicit_child_pins_and_unrelated_content() {
+    let f = Fixture::new(true);
+    put_folder(&f.drive, "parent", "Parent", "root");
+    put_folder(&f.drive, "nested", "Nested", "parent");
+    put_folder(&f.drive, "protected", "Protected", "parent");
+    for (id, name, parent) in [
+        ("released", "release.txt", "nested"),
+        ("pinned-file", "keep.txt", "parent"),
+        ("pinned-child", "child.txt", "protected"),
+        ("outside", "outside.txt", "root"),
+    ] {
+        f.drive.put(id, name, id.as_bytes());
+        move_under(&f.drive, id, parent);
+    }
+    let e = online_engine(&f).await;
+    e.sync_once().await.unwrap();
+    for target in ["r:parent", "r:pinned-file", "r:protected"] {
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), target, true)
+            .await
+            .unwrap();
+    }
+    e.sync_once().await.unwrap();
+    let outside = e.db.by_remote("outside").await.unwrap().unwrap();
+    e.hydrate(&outside.id).await.unwrap();
+    f.drive.put("future", "future.txt", b"future child");
+    move_under(&f.drive, "future", "nested");
+    e.sync_once().await.unwrap();
+
+    // A child that still inherits its parent's selection cannot be dehydrated.
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:nested", false)
+        .await
+        .unwrap();
+    e.sync_once().await.unwrap();
+    assert!(f.root.join("Parent/Nested/release.txt").exists());
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:parent", false)
+        .await
+        .unwrap();
+    let report = e.sync_once().await.unwrap();
+    assert!(report.errors.is_empty(), "{report:?}");
+    for id in ["released", "future"] {
+        let file = e.db.by_remote(id).await.unwrap().unwrap();
+        assert!(!f.root.join(&file.relative_path).exists(), "{id}");
+        assert_eq!(file.status, "online_only");
+    }
+    for id in ["pinned-file", "pinned-child", "outside"] {
+        let file = e.db.by_remote(id).await.unwrap().unwrap();
+        assert!(f.root.join(&file.relative_path).exists(), "{id}");
+    }
+    let objects = e.db.cached_objects().await.unwrap();
+    assert!(objects
+        .iter()
+        .all(|o| !matches!(o.remote_id.as_deref(), Some("released" | "future"))));
+    for id in ["pinned-file", "pinned-child", "outside"] {
+        assert!(
+            objects.iter().any(|o| o.remote_id.as_deref() == Some(id)),
+            "{id}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn unpin_waits_for_upload_and_preserves_review_and_pending_operations_across_restart() {
+    let f = Fixture::new(true);
+    for id in ["dirty", "review", "pending"] {
+        f.drive.put(id, &format!("{id}.txt"), b"baseline");
+    }
+    let e = online_engine(&f).await;
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "root", true)
+        .await
+        .unwrap();
+    e.sync_once().await.unwrap();
+    let mut review = e.db.by_remote("review").await.unwrap().unwrap();
+    review.review_required = true;
+    review.status = "recovery_review".into();
+    e.db.save_file(&review).await.unwrap();
+    let pending = e.db.by_remote("pending").await.unwrap().unwrap();
+    let mut op = Operation::new(&pending, "download", f.drive.get("pending").await.unwrap());
+    // The original hydration completed the same generation/version download.
+    // Give this intentionally deferred operation its own idempotency key.
+    op.key.push_str(":pending-for-unpin-test");
+    op.next_retry_ms = i64::MAX;
+    let registered = e.db.operation(&op).await.unwrap();
+    assert_eq!(registered.id, op.id);
+    assert_eq!(registered.stage, "planned");
+    std::fs::write(f.root.join("dirty.txt"), b"unsaved local edit").unwrap();
+    std::fs::write(f.root.join("new.txt"), b"not yet uploaded").unwrap();
+    e.scanner.scan().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "root", false)
+        .await
+        .unwrap();
+    f.drive.offline.store(true, Ordering::SeqCst);
+    assert!(e.sync_once().await.is_err());
+    for name in ["dirty.txt", "review.txt", "pending.txt", "new.txt"] {
+        assert!(f.root.join(name).exists(), "{name}");
+    }
+    assert_eq!(f.drive.data("dirty"), b"baseline");
+    drop(e);
+    let e = online_engine(&f).await;
+    e.scanner.scan().await.unwrap();
+    assert_eq!(
+        e.db.by_remote("dirty").await.unwrap().unwrap().status,
+        "modified_local"
+    );
+    f.drive.offline.store(false, Ordering::SeqCst);
+    let report = e.sync_once().await.unwrap();
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert_eq!(f.drive.data("dirty"), b"unsaved local edit");
+    assert!(!f.root.join("dirty.txt").exists());
+    let uploaded =
+        e.db.files()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|file| file.relative_path == "new.txt")
+            .unwrap();
+    assert_eq!(
+        f.drive.data(uploaded.remote_id.as_deref().unwrap()),
+        b"not yet uploaded"
+    );
+    assert!(!f.root.join("new.txt").exists());
+    assert_eq!(
+        std::fs::read(f.root.join("review.txt")).unwrap(),
+        b"baseline"
+    );
+    assert_eq!(
+        std::fs::read(f.root.join("pending.txt")).unwrap(),
+        b"baseline"
+    );
+    assert!(e.db.file(&review.id).await.unwrap().review_required);
+    assert!(e
+        .db
+        .operations()
+        .await
+        .unwrap()
+        .iter()
+        .any(|current| current.id == op.id));
+}
+
+#[tokio::test]
+async fn unpin_preserves_open_backing_descriptor_and_its_later_writes_until_close() {
+    let f = Fixture::new(true);
+    f.drive.put("one", "one.txt", b"initial");
+    let e = online_engine(&f).await;
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+        .await
+        .unwrap();
+    e.sync_once().await.unwrap();
+    let path = f.root.join("one.txt");
+    let mut open = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+        .await
+        .unwrap();
+    let report = e.sync_once().await.unwrap();
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"initial");
+    open.write_all(b" plus edit").unwrap();
+    open.sync_all().unwrap();
+    e.sync_once().await.unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"initial plus edit");
+    assert_eq!(f.drive.data("one"), b"initial plus edit");
+    drop(open);
+    e.sync_once().await.unwrap();
+    assert!(!path.exists());
+    assert_eq!(f.drive.data("one"), b"initial plus edit");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn unpin_preserves_writable_mapping_even_after_its_descriptor_is_closed() {
+    use std::os::fd::AsRawFd;
+    struct Mapping(*mut libc::c_void, usize);
+    impl Drop for Mapping {
+        fn drop(&mut self) {
+            unsafe {
+                libc::munmap(self.0, self.1);
+            }
+        }
+    }
+    let f = Fixture::new(true);
+    f.drive.put("one", "one.txt", b"mapped bytes");
+    let e = online_engine(&f).await;
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+        .await
+        .unwrap();
+    e.sync_once().await.unwrap();
+    let path = f.root.join("one.txt");
+    let fd = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    let address = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            12,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd.as_raw_fd(),
+            0,
+        )
+    };
+    assert_ne!(address, libc::MAP_FAILED);
+    let mapping = Mapping(address, 12);
+    drop(fd);
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+        .await
+        .unwrap();
+    let report = e.sync_once().await.unwrap();
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"mapped bytes");
+    unsafe {
+        std::ptr::write_volatile(mapping.0.cast::<u8>(), b'M');
+        assert_eq!(libc::msync(mapping.0, mapping.1, libc::MS_SYNC), 0);
+    }
+    drop(mapping);
+    e.sync_once().await.unwrap();
+    assert_eq!(f.drive.data("one"), b"Mapped bytes");
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn unpin_rechecks_remote_safety_after_reconciliation_and_retries_later() {
+    for case in ["missing", "version", "checksum", "permission", "scope"] {
+        let f = Fixture::new(true);
+        f.drive.put("one", "one.txt", b"verified remote bytes");
+        let e = online_engine(&f).await;
+        e.sync_once().await.unwrap();
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+            .await
+            .unwrap();
+        e.sync_once().await.unwrap();
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+            .await
+            .unwrap();
+        let mut changed = f.drive.get("one").await.unwrap().unwrap();
+        match case {
+            "version" => changed.version = "999".into(),
+            "checksum" => changed.sha256_checksum = Some("bad checksum".into()),
+            "permission" => changed.capabilities.can_download = Some(false),
+            "scope" => changed.parents = vec!["outside-profile".into()],
+            "missing" => {}
+            _ => unreachable!(),
+        }
+        // Reconciliation observes the original; the later reclamation GET must
+        // independently reject this unavailable or changed server response.
+        *f.drive.get_override.lock().unwrap() = Some((
+            "one".into(),
+            1,
+            if case == "missing" {
+                None
+            } else {
+                Some(changed)
+            },
+        ));
+        e.sync_once().await.unwrap();
+        assert_eq!(
+            std::fs::read(f.root.join("one.txt")).unwrap(),
+            b"verified remote bytes",
+            "{case}"
+        );
+        assert!(
+            e.db.by_remote("one").await.unwrap().unwrap().materialized,
+            "{case}"
+        );
+        assert!(
+            e.db.cached_objects()
+                .await
+                .unwrap()
+                .iter()
+                .any(|o| o.remote_id.as_deref() == Some("one")),
+            "{case}"
+        );
+        e.sync_once().await.unwrap();
+        assert!(!f.root.join("one.txt").exists(), "{case}");
+        assert_eq!(f.drive.data("one"), b"verified remote bytes");
+    }
+}
+
+#[tokio::test]
+async fn unpin_cleanup_is_cancelled_by_repin_and_retains_clean_content_without_network() {
+    let f = Fixture::new(true);
+    f.drive.put("one", "one.txt", b"keep available");
+    let e = online_engine(&f).await;
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+        .await
+        .unwrap();
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+        .await
+        .unwrap();
+    f.drive.offline.store(true, Ordering::SeqCst);
+    assert!(e.sync_once().await.is_err());
+    assert_eq!(
+        std::fs::read(f.root.join("one.txt")).unwrap(),
+        b"keep available"
+    );
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+        .await
+        .unwrap();
+    f.drive.offline.store(false, Ordering::SeqCst);
+    e.sync_once().await.unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("one.txt")).unwrap(),
+        b"keep available"
+    );
+    assert_eq!(f.drive.download_calls.load(Ordering::SeqCst), 1);
+    assert!(e.offline_page("root", 0).await.unwrap().children[0].effective);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unpin_new_request_survives_completion_of_an_older_cleanup_after_reopen() {
+    let f = Fixture::new(true);
+    f.drive.put("one", "one.txt", b"first file");
+    f.drive.put("two", "two.txt", b"second file");
+    let e = Arc::new(online_engine(&f).await);
+    e.sync_once().await.unwrap();
+    for target in ["r:one", "r:two"] {
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), target, true)
+            .await
+            .unwrap();
+    }
+    e.sync_once().await.unwrap();
+    let one = e.db.by_remote("one").await.unwrap().unwrap();
+    // Requests enter the durable queue in this order. Hold the second file's
+    // cleanup verification after its ordinary reconciliation GET has passed.
+    for target in ["r:one", "r:two"] {
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), target, false)
+            .await
+            .unwrap();
+    }
+    *f.drive.hold_get_after.lock().unwrap() = Some(("two".into(), 1));
+    let engine = e.clone();
+    let task = tokio::spawn(async move { engine.sync_once().await });
+    tokio::time::timeout(Duration::from_secs(5), f.drive.get_entered.notified())
+        .await
+        .unwrap();
+    assert!(!f.root.join("one.txt").exists());
+    e.hydrate(&one.id).await.unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("one.txt")).unwrap(),
+        b"first file"
+    );
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+        .await
+        .unwrap();
+    f.drive.release_get.notify_one();
+    let report = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert!(f.root.join("one.txt").exists());
+    let pending: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM dehydration_requests WHERE file_id=?")
+            .bind(&one.id)
+            .fetch_one(&e.db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        pending, 1,
+        "a newer request must outlive the older worker's completion"
+    );
+    let report = e.sync_once().await.unwrap();
+    assert!(report.errors.is_empty(), "{report:?}");
+    assert!(!f.root.join("one.txt").exists());
+    assert_eq!(f.drive.data("one"), b"first file");
+    assert!(!f.drive.get("one").await.unwrap().unwrap().trashed);
+}
+
+#[tokio::test]
+async fn unpin_recovers_each_interrupted_removal_stage_before_scanning_or_remote_sync() {
+    for stage in ["prepared", "renamed", "online", "unlinked"] {
+        let f = Fixture::new(true);
+        f.drive.put("one", "one.txt", b"recoverable remote bytes");
+        let e = online_engine(&f).await;
+        e.sync_once().await.unwrap();
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+            .await
+            .unwrap();
+        e.sync_once().await.unwrap();
+        let original = e.db.by_remote("one").await.unwrap().unwrap();
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+            .await
+            .unwrap();
+        let staging = format!(
+            "{}{}.evict",
+            mygdrive_sync::local::INTERNAL_PREFIX,
+            uuid::Uuid::new_v4()
+        );
+        let journal = serde_json::json!({ "file": original, "staging": staging });
+        sqlx::query("UPDATE dehydration_requests SET journal=? WHERE file_id=?")
+            .bind(serde_json::to_string(&journal).unwrap())
+            .bind(&original.id)
+            .execute(&e.db.pool)
+            .await
+            .unwrap();
+        let source = f.root.join("one.txt");
+        let staged = f.root.join(&staging);
+        if stage != "prepared" {
+            std::fs::rename(&source, &staged).unwrap();
+            mygdrive_sync::local::sync_directory(&f.root).unwrap();
+        }
+        if matches!(stage, "online" | "unlinked") {
+            let mut online = original.clone();
+            online.generation += 1;
+            online.materialized = false;
+            online.fingerprint = None;
+            online.available_offline = false;
+            online.status = "online_only".into();
+            e.db.save_file(&online).await.unwrap();
+        }
+        if stage == "unlinked" {
+            std::fs::remove_file(&staged).unwrap();
+            mygdrive_sync::local::sync_directory(&f.root).unwrap();
+        }
+        drop(e);
+        let e = online_engine(&f).await;
+        e.scanner.scan().await.unwrap();
+        let recovered = e.db.by_remote("one").await.unwrap().unwrap();
+        assert_eq!(recovered.id, original.id, "{stage}");
+        assert!(
+            !matches!(recovered.status.as_str(), "deleted_local" | "tombstone"),
+            "{stage}"
+        );
+        assert!(!staged.exists(), "{stage}");
+        if stage == "unlinked" {
+            assert!(!source.exists());
+            assert_eq!(recovered.status, "online_only");
+            assert!(!recovered.materialized);
+        } else {
+            assert_eq!(
+                std::fs::read(&source).unwrap(),
+                b"recoverable remote bytes",
+                "{stage}"
+            );
+            assert!(recovered.materialized, "{stage}");
+            assert_eq!(recovered.status, "synced", "{stage}");
+        }
+        let active_journals: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM dehydration_requests WHERE journal IS NOT NULL",
+        )
+        .fetch_one(&e.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(active_journals, 0, "{stage}");
+        // Recovery is idempotent, and the remaining request can finish normally.
+        e.scanner.scan().await.unwrap();
+        let report = e.sync_once().await.unwrap();
+        assert!(report.errors.is_empty(), "{stage}: {report:?}");
+        assert_eq!(f.drive.data("one"), b"recoverable remote bytes");
+        assert!(
+            !f.drive.get("one").await.unwrap().unwrap().trashed,
+            "{stage}"
+        );
+        assert!(!source.exists(), "{stage}");
+    }
+}
+
+#[tokio::test]
+async fn unpin_recovery_preserves_a_recreated_path_and_staged_bytes_for_review() {
+    let f = Fixture::new(true);
+    f.drive.put("one", "one.txt", b"original staged content");
+    let e = online_engine(&f).await;
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+        .await
+        .unwrap();
+    e.sync_once().await.unwrap();
+    let original = e.db.by_remote("one").await.unwrap().unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+        .await
+        .unwrap();
+    let staging = format!(
+        "{}{}.evict",
+        mygdrive_sync::local::INTERNAL_PREFIX,
+        uuid::Uuid::new_v4()
+    );
+    sqlx::query("UPDATE dehydration_requests SET journal=? WHERE file_id=?")
+        .bind(serde_json::json!({ "file": original, "staging": staging }).to_string())
+        .bind(&original.id)
+        .execute(&e.db.pool)
+        .await
+        .unwrap();
+    std::fs::rename(f.root.join("one.txt"), f.root.join(&staging)).unwrap();
+    let mut online = original.clone();
+    online.generation += 1;
+    online.materialized = false;
+    online.fingerprint = None;
+    online.status = "online_only".into();
+    e.db.save_file(&online).await.unwrap();
+    std::fs::write(f.root.join("one.txt"), b"new concurrent file").unwrap();
+    drop(e);
+    let e = online_engine(&f).await;
+    e.scanner.scan().await.unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("one.txt")).unwrap(),
+        b"new concurrent file"
+    );
+    assert!(!f.root.join(&staging).exists());
+    let files = e.db.files().await.unwrap();
+    let recovered = files
+        .iter()
+        .find(|file| file.relative_path != "one.txt")
+        .unwrap();
+    assert!(recovered.review_required);
+    assert_eq!(recovered.status, "recovery_review");
+    assert_eq!(
+        std::fs::read(f.root.join(&recovered.relative_path)).unwrap(),
+        b"original staged content"
+    );
+    assert_eq!(
+        e.db.by_remote("one").await.unwrap().unwrap().id,
+        original.id
+    );
+    assert_eq!(f.drive.data("one"), b"original staged content");
+    assert!(!f.drive.get("one").await.unwrap().unwrap().trashed);
+    e.scanner.scan().await.unwrap();
+    assert_eq!(e.db.files().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn unpin_recovery_resumes_interrupted_rollback_before_any_recovered_file_upload() {
+    for recorded in [false, true] {
+        let f = Fixture::new(true);
+        f.drive.put("one", "one.txt", b"recover this for review");
+        let e = online_engine(&f).await;
+        e.sync_once().await.unwrap();
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+            .await
+            .unwrap();
+        e.sync_once().await.unwrap();
+        let original = e.db.by_remote("one").await.unwrap().unwrap();
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+            .await
+            .unwrap();
+        let staging = format!(
+            "{}{}.evict",
+            mygdrive_sync::local::INTERNAL_PREFIX,
+            uuid::Uuid::new_v4()
+        );
+        let rollback = mygdrive_sync::engine::conflict_name(
+            &original.relative_path,
+            &format!(
+                "Recovery - {}",
+                std::path::Path::new(&staging)
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+            ),
+        );
+        sqlx::query("UPDATE dehydration_requests SET journal=? WHERE file_id=?")
+            .bind(
+                serde_json::json!({
+                    "file": original, "staging": staging, "rollback": rollback
+                })
+                .to_string(),
+            )
+            .bind(&original.id)
+            .execute(&e.db.pool)
+            .await
+            .unwrap();
+        // The first recovery moved the staged inode to its persisted collision
+        // destination, then stopped before its review state was durable.
+        std::fs::rename(f.root.join("one.txt"), f.root.join(&rollback)).unwrap();
+        let mut online = original.clone();
+        online.generation += 1;
+        online.materialized = false;
+        online.fingerprint = None;
+        online.status = "online_only".into();
+        e.db.save_file(&online).await.unwrap();
+        std::fs::write(f.root.join("one.txt"), b"concurrent replacement").unwrap();
+        if recorded {
+            e.db.record_local(
+                &rollback,
+                Some(fingerprint(&f.root.join(&rollback)).unwrap()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                e.db.files()
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .find(|file| file.relative_path == rollback)
+                    .unwrap()
+                    .status,
+                "new_local"
+            );
+        }
+        drop(e);
+        let e = online_engine(&f).await;
+        let recovered =
+            e.db.files()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|file| file.relative_path == rollback)
+                .unwrap();
+        assert!(recovered.review_required, "recorded={recorded}");
+        assert_eq!(recovered.status, "recovery_review");
+        e.scanner.scan().await.unwrap();
+        let report = e.sync_once().await.unwrap();
+        assert!(report.errors.is_empty(), "recorded={recorded}: {report:?}");
+        assert_eq!(
+            std::fs::read(f.root.join(&rollback)).unwrap(),
+            b"recover this for review"
+        );
+        assert!(e.db.file(&recovered.id).await.unwrap().remote_id.is_none());
+        assert!(e.db.file(&recovered.id).await.unwrap().review_required);
+        assert!(!f
+            .drive
+            .files
+            .lock()
+            .unwrap()
+            .values()
+            .any(|(remote, _)| remote.name == rollback));
+        assert!(!f.drive.get("one").await.unwrap().unwrap().trashed);
+    }
+}
+
+#[tokio::test]
+async fn unpin_recovery_preserves_recreated_original_and_occupied_rollback_destination() {
+    let f = Fixture::new(true);
+    f.drive.put("one", "one.txt", b"staged original bytes");
+    let e = online_engine(&f).await;
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+        .await
+        .unwrap();
+    e.sync_once().await.unwrap();
+    let original = e.db.by_remote("one").await.unwrap().unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+        .await
+        .unwrap();
+    let staging = format!(
+        "{}{}.evict",
+        mygdrive_sync::local::INTERNAL_PREFIX,
+        uuid::Uuid::new_v4()
+    );
+    let default_recovery = mygdrive_sync::engine::conflict_name(
+        &original.relative_path,
+        &format!(
+            "Recovery - {}",
+            std::path::Path::new(&staging)
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+        ),
+    );
+    // Recovery persisted a rollback to the original pathname, then stopped
+    // before its rename. Another app has since occupied both normal choices.
+    sqlx::query("UPDATE dehydration_requests SET journal=? WHERE file_id=?")
+        .bind(
+            serde_json::json!({
+                "file": original,
+                "staging": staging,
+                "rollback": original.relative_path
+            })
+            .to_string(),
+        )
+        .bind(&original.id)
+        .execute(&e.db.pool)
+        .await
+        .unwrap();
+    std::fs::rename(f.root.join("one.txt"), f.root.join(&staging)).unwrap();
+    std::fs::write(f.root.join("one.txt"), b"recreated original pathname").unwrap();
+    std::fs::write(
+        f.root.join(&default_recovery),
+        b"occupied recovery pathname",
+    )
+    .unwrap();
+    drop(e);
+    let e = online_engine(&f).await;
+    e.scanner.scan().await.unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("one.txt")).unwrap(),
+        b"recreated original pathname"
+    );
+    assert_eq!(
+        std::fs::read(f.root.join(&default_recovery)).unwrap(),
+        b"occupied recovery pathname"
+    );
+    assert!(!f.root.join(&staging).exists());
+    let files = e.db.files().await.unwrap();
+    assert_eq!(files.len(), 3);
+    let recovered = files.iter().find(|file| file.review_required).unwrap();
+    assert_ne!(recovered.relative_path, "one.txt");
+    assert_ne!(recovered.relative_path, default_recovery);
+    assert_eq!(recovered.status, "recovery_review");
+    assert_eq!(
+        std::fs::read(f.root.join(&recovered.relative_path)).unwrap(),
+        b"staged original bytes"
+    );
+    assert_eq!(f.drive.data("one"), b"staged original bytes");
+    assert!(!f.drive.get("one").await.unwrap().unwrap().trashed);
+    e.scanner.scan().await.unwrap();
+    assert_eq!(e.db.files().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn unpin_does_not_remove_content_when_the_backing_root_identity_changes() {
+    let f = Fixture::new(true);
+    f.drive.put("one", "one.txt", b"preserve the original tree");
+    let e = online_engine(&f).await;
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+        .await
+        .unwrap();
+    e.sync_once().await.unwrap();
+    e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+        .await
+        .unwrap();
+    let saved = f.root.with_file_name("original-sync-root");
+    std::fs::rename(&f.root, &saved).unwrap();
+    std::fs::create_dir(&f.root).unwrap();
+    assert!(e.sync_once().await.is_err());
+    assert_eq!(
+        std::fs::read(saved.join("one.txt")).unwrap(),
+        b"preserve the original tree"
+    );
+    assert!(!f.root.join("one.txt").exists());
+    assert!(!f.drive.get("one").await.unwrap().unwrap().trashed);
+}
+
+#[tokio::test]
+async fn unpin_malformed_recovery_journal_blocks_scanning_without_touching_user_files() {
+    for case in [
+        "invalid-json",
+        "wrong-file",
+        "escape",
+        "not-internal",
+        "other-parent",
+    ] {
+        let f = Fixture::new(true);
+        f.drive.put("one", "one.txt", b"keep original");
+        let e = online_engine(&f).await;
+        e.sync_once().await.unwrap();
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", true)
+            .await
+            .unwrap();
+        e.sync_once().await.unwrap();
+        let original = e.db.by_remote("one").await.unwrap().unwrap();
+        e.offline_select(&uuid::Uuid::new_v4().to_string(), "r:one", false)
+            .await
+            .unwrap();
+        let mut journal_file = original.clone();
+        let name = format!(
+            "{}{}.evict",
+            mygdrive_sync::local::INTERNAL_PREFIX,
+            uuid::Uuid::new_v4()
+        );
+        let staging = match case {
+            "wrong-file" => {
+                journal_file.id = "another-file".into();
+                name.clone()
+            }
+            "escape" => format!("../{name}"),
+            "not-internal" => "ordinary-user-file.txt".into(),
+            "other-parent" => format!("elsewhere/{name}"),
+            _ => name.clone(),
+        };
+        let data = if case == "invalid-json" {
+            "{".into()
+        } else {
+            serde_json::json!({ "file": journal_file, "staging": staging }).to_string()
+        };
+        sqlx::query("UPDATE dehydration_requests SET journal=? WHERE file_id=?")
+            .bind(data)
+            .bind(&original.id)
+            .execute(&e.db.pool)
+            .await
+            .unwrap();
+        std::fs::write(f.root.join("ordinary-user-file.txt"), b"also keep this").unwrap();
+        assert!(e.scanner.scan().await.is_err(), "{case}");
+        assert_eq!(
+            std::fs::read(f.root.join("one.txt")).unwrap(),
+            b"keep original",
+            "{case}"
+        );
+        assert_eq!(
+            std::fs::read(f.root.join("ordinary-user-file.txt")).unwrap(),
+            b"also keep this",
+            "{case}"
+        );
+        assert_eq!(
+            e.db.file(&original.id).await.unwrap().status,
+            "synced",
+            "{case}"
+        );
+        assert!(
+            !f.drive.get("one").await.unwrap().unwrap().trashed,
+            "{case}"
+        );
+    }
 }
 
 #[tokio::test]

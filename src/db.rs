@@ -105,7 +105,7 @@ impl Database {
         let version: i64 = sqlx::query_scalar("PRAGMA user_version")
             .fetch_one(&pool)
             .await?;
-        if version > 3 {
+        if version > 4 {
             return Err(Error::Invalid(
                 "database schema is newer than this application".into(),
             ));
@@ -126,6 +126,11 @@ impl Database {
                 .execute(&mut *tx)
                 .await?;
         }
+        if version < 4 {
+            sqlx::raw_sql(include_str!("../migrations/0004_dehydration.sql"))
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         sqlx::raw_sql(crate::directory_sync::SCHEMA)
             .execute(&pool)
@@ -140,6 +145,7 @@ impl Database {
         .await?;
         // Optional performance index is idempotent for existing schema-3 profiles too.
         sqlx::query("CREATE INDEX IF NOT EXISTS offline_remote_parent ON remote_observations(json_extract(data,'$.parents[0]'))").execute(&pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS active_operations_file ON sync_operations(file_id) WHERE stage NOT IN ('done','cancelled')").execute(&pool).await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS scanner_materialized_files ON files(relative_path) WHERE json_extract(data,'$.materialized')=1 AND sync_status!='tombstone'")
             .execute(&pool).await?;
         sqlx::query(&format!("CREATE INDEX IF NOT EXISTS reconciliation_candidates ON files(relative_path) WHERE {RECONCILIATION_FILTER}"))
@@ -345,7 +351,25 @@ impl Database {
                 available_offline: false,
             }
         };
-        if file.fingerprint == fingerprint {
+        // A local file can disappear before its first upload (including editor
+        // sidecars tracked by an older version). No cloud deletion is needed,
+        // but an unfinished journal may still own a reserved/committed cloud ID.
+        // Check that journal in this transaction before retiring the local row.
+        let unpublished_deletion = fingerprint.is_none()
+            && file.materialized
+            && file.remote_id.is_none()
+            && file.baseline.is_none()
+            && !file.review_required
+            && file.status != "recovery_review"
+            && sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM sync_operations WHERE file_id=? AND stage NOT IN ('done','cancelled')",
+            )
+            .bind(&file.id)
+            .fetch_one(&mut *tx)
+            .await?
+                == 0;
+        if file.fingerprint == fingerprint && (!unpublished_deletion || file.status == "tombstone")
+        {
             return Ok(());
         }
         file.review_required |= file.status == "recovery_review";
@@ -357,7 +381,11 @@ impl Database {
         }
         file.fingerprint = fingerprint;
         file.materialized = file.materialized || file.fingerprint.is_some();
-        file.status = status(&file);
+        file.status = if unpublished_deletion {
+            "tombstone".into()
+        } else {
+            status(&file)
+        };
         Self::write_file(&mut tx, &self.account, &file).await?;
         tx.commit().await?;
         Ok(())

@@ -10,7 +10,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     os::unix::fs::MetadataExt,
     path::Path,
 };
@@ -75,6 +75,74 @@ fn under(path: &str, ancestor: &str) -> bool {
 }
 fn rebase(path: &str, source: &str, target: &str) -> String {
     format!("{target}{}", &path[source.len()..])
+}
+
+#[derive(Default)]
+struct ScanIndex {
+    inodes: HashMap<(u64, u64), BTreeSet<usize>>,
+    paths: HashMap<String, BTreeSet<usize>>,
+}
+impl ScanIndex {
+    fn new(directories: &[Directory]) -> Self {
+        let mut index = Self::default();
+        for (position, directory) in directories.iter().enumerate() {
+            index.insert(position, directory);
+        }
+        index
+    }
+    fn insert(&mut self, position: usize, directory: &Directory) {
+        self.inodes
+            .entry((directory.device, directory.inode))
+            .or_default()
+            .insert(position);
+        self.paths
+            .entry(directory.relative_path.clone())
+            .or_default()
+            .insert(position);
+    }
+    fn find(
+        &self,
+        directories: &[Directory],
+        seen: &HashSet<String>,
+        path: &str,
+        device: u64,
+        inode: u64,
+    ) -> Option<usize> {
+        // Keep the old vector's first-match ordering, including an inode match
+        // already seen at another path. Only path fallback excludes seen IDs.
+        self.inodes
+            .get(&(device, inode))
+            .and_then(|positions| positions.first().copied())
+            .or_else(|| {
+                self.paths
+                    .get(path)?
+                    .iter()
+                    .copied()
+                    .find(|position| !seen.contains(&directories[*position].id))
+            })
+    }
+    fn replace(&mut self, position: usize, old: &Directory, new: &Directory) {
+        if (old.device, old.inode) != (new.device, new.inode) {
+            self.inodes
+                .get_mut(&(old.device, old.inode))
+                .unwrap()
+                .remove(&position);
+            self.inodes
+                .entry((new.device, new.inode))
+                .or_default()
+                .insert(position);
+        }
+        if old.relative_path != new.relative_path {
+            self.paths
+                .get_mut(&old.relative_path)
+                .unwrap()
+                .remove(&position);
+            self.paths
+                .entry(new.relative_path.clone())
+                .or_default()
+                .insert(position);
+        }
+    }
 }
 
 /// Only called for parents from an in-scope projected cloud path or a durable
@@ -142,18 +210,12 @@ pub async fn scan(db: &Database, root: &Path) -> Result<()> {
     .await
     .map_err(|e| Error::Invalid(format!("directory scan: {e}")))??;
     let mut known = directories(db).await?;
+    let mut lookup = ScanIndex::new(&known);
     let mut seen = HashSet::new();
     // Inode first identifies moves. Path fallback permits delete/recreate at the
     // same location without inventing a second cloud folder with the same name.
     for (path, dev, ino) in observed {
-        let index = known
-            .iter()
-            .position(|d| d.device == dev && d.inode == ino)
-            .or_else(|| {
-                known
-                    .iter()
-                    .position(|d| d.relative_path == path && !seen.contains(&d.id))
-            });
+        let index = lookup.find(&known, &seen, &path, dev, ino);
         let old_data = index
             .map(|i| serde_json::to_string(&known[i]))
             .transpose()?;
@@ -200,6 +262,7 @@ pub async fn scan(db: &Database, root: &Path) -> Result<()> {
             save(db, &directory).await?;
         }
         if let Some(index) = index {
+            lookup.replace(index, &known[index], &directory);
             known[index] = directory;
         }
     }
@@ -391,12 +454,110 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// Caller holds Scanner.gate. Pinning a folder also creates empty descendants
+/// and records their existing Drive identities before a watcher can see them.
+pub(crate) async fn materialize_pinned(
+    db: &Database,
+    root: &Path,
+    remotes: &[RemoteFile],
+    paths: &HashMap<String, String>,
+    selected: &HashSet<String>,
+) -> Result<()> {
+    let mut needed = HashSet::new();
+    for id in selected {
+        if let Some(path) = paths.get(id) {
+            let mut path = path.as_str();
+            while !path.is_empty() {
+                needed.insert(path.to_owned());
+                path = parent_path(path);
+            }
+        }
+    }
+    let mut folders: Vec<_> = remotes
+        .iter()
+        .filter_map(|remote| {
+            let path = paths.get(&remote.id)?;
+            (remote.folder() && needed.contains(path)).then_some((path, remote))
+        })
+        .collect();
+    folders.sort_by_key(|(path, _)| path.matches('/').count());
+    let mut known = directories(db).await?;
+    let mut blocked = Vec::<String>::new();
+    for (path, remote) in folders {
+        if blocked.iter().any(|ancestor| under(path, ancestor)) {
+            continue;
+        }
+        let index = known
+            .iter()
+            .position(|dir| dir.remote_id.as_deref() == Some(&remote.id))
+            .or_else(|| known.iter().position(|dir| dir.relative_path == *path));
+        if index.is_some_and(|i| {
+            let dir = &known[i];
+            !dir.present
+                || dir.review_required
+                || dir.move_journal.is_some()
+                || dir.relative_path != *path
+                || dir.remote_id.as_ref().is_some_and(|id| id != &remote.id)
+        }) {
+            blocked.push(path.clone());
+            continue;
+        }
+        let target = local::safe_path(root, path)?;
+        match std::fs::create_dir(&target) {
+            Ok(()) => {
+                local::sync_directory(&target)?;
+                local::sync_directory(target.parent().ok_or(Error::Changed)?)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(error) => return Err(error.into()),
+        }
+        let meta = std::fs::symlink_metadata(&target)?;
+        if !meta.is_dir() {
+            return Err(Error::Changed);
+        }
+        let mut directory = index
+            .map(|i| known[i].clone())
+            .unwrap_or_else(|| Directory {
+                id: uuid::Uuid::new_v4().to_string(),
+                relative_path: path.clone(),
+                device: meta.dev(),
+                inode: meta.ino(),
+                present: true,
+                generation: 0,
+                remote_id: None,
+                baseline: None,
+                creation_path: None,
+                creation_parent: None,
+                review_required: false,
+                move_journal: None,
+            });
+        directory.device = meta.dev();
+        directory.inode = meta.ino();
+        directory.remote_id = Some(remote.id.clone());
+        directory.baseline = Some(DirectoryBaseline {
+            relative_path: path.clone(),
+            remote: remote.clone(),
+        });
+        save(db, &directory).await?;
+        if let Some(i) = index {
+            known[i] = directory;
+        } else {
+            known.push(directory);
+        }
+    }
+    Ok(())
+}
+
 pub async fn reconcile_before(
     db: &Database,
     scanner: &Scanner,
     drive: &dyn DriveClient,
     root_id: &str,
 ) -> Result<Vec<String>> {
+    let mut dirs = directories(db).await?;
+    if dirs.is_empty() {
+        return Ok(Vec::new());
+    }
     let remotes = db.remotes().await?;
     let paths = crate::engine::project_paths(&remotes, root_id);
     let mut path_ids: HashMap<String, String> = remotes
@@ -406,7 +567,6 @@ pub async fn reconcile_before(
         .collect();
     path_ids.insert(String::new(), root_id.into());
     let by_id: HashMap<_, _> = remotes.iter().map(|r| (r.id.as_str(), r)).collect();
-    let mut dirs = directories(db).await?;
     dirs.sort_by_key(|d| d.relative_path.matches('/').count());
     let mut bound: HashSet<String> = dirs.iter().filter_map(|d| d.remote_id.clone()).collect();
     let mut errors = Vec::new();
@@ -668,4 +828,101 @@ pub async fn reconcile_after(
         }
     }
     Ok(errors)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn directory(id: &str, path: &str, inode: u64) -> Directory {
+        Directory {
+            id: id.into(),
+            relative_path: path.into(),
+            device: 1,
+            inode,
+            present: true,
+            generation: 0,
+            remote_id: None,
+            baseline: None,
+            creation_path: None,
+            creation_parent: None,
+            review_required: false,
+            move_journal: None,
+        }
+    }
+
+    fn assert_index_matches_linear_order(index: &ScanIndex, directories: &[Directory]) {
+        for seen in [HashSet::new(), HashSet::from(["first".into()])] {
+            for path in ["a", "b", "moved", "missing"] {
+                for inode in [11, 22, 44, 99] {
+                    let linear = directories
+                        .iter()
+                        .position(|directory| directory.device == 1 && directory.inode == inode)
+                        .or_else(|| {
+                            directories.iter().position(|directory| {
+                                directory.relative_path == path && !seen.contains(&directory.id)
+                            })
+                        });
+                    assert_eq!(
+                        index.find(directories, &seen, path, 1, inode),
+                        linear,
+                        "path={path} inode={inode} seen={seen:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scan_index_preserves_inode_priority_duplicate_order_and_unseen_path_fallback() {
+        let mut directories = vec![
+            directory("first", "a", 11),
+            directory("duplicate-inode", "b", 11),
+            directory("duplicate-path", "a", 22),
+        ];
+        let mut index = ScanIndex::new(&directories);
+        assert_index_matches_linear_order(&index, &directories);
+
+        let mut moved = directories[0].clone();
+        moved.relative_path = "moved".into();
+        moved.inode = 44;
+        index.replace(0, &directories[0], &moved);
+        directories[0] = moved;
+        assert_index_matches_linear_order(&index, &directories);
+
+        let mut recreated = directories[1].clone();
+        recreated.relative_path = "a".into();
+        recreated.inode = 22;
+        index.replace(1, &directories[1], &recreated);
+        directories[1] = recreated;
+        assert_index_matches_linear_order(&index, &directories);
+    }
+
+    #[tokio::test]
+    async fn empty_directory_ledger_does_not_decode_the_remote_inventory() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("state.sqlite3"), "test")
+            .await
+            .unwrap();
+        // Valid SQLite JSON, but not a valid RemoteFile. An empty ledger must
+        // not read remote file records just to decide there is no folder work.
+        sqlx::query("INSERT INTO remote_observations(id,data,pending) VALUES('unused','{}',1)")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(db.remotes().await.is_err());
+        let scanner = Scanner {
+            root: temp.path().join("files"),
+            db: db.clone(),
+            gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        };
+        let drive = crate::drive::HttpDriveClient::new(std::sync::Arc::new(
+            crate::drive::TokenFile(temp.path().join("unused-token")),
+        ))
+        .unwrap();
+        assert!(reconcile_before(&db, &scanner, &drive, "root")
+            .await
+            .unwrap()
+            .is_empty());
+    }
 }

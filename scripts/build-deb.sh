@@ -68,6 +68,9 @@ install -m 0644 LICENSE "$package_dir/usr/share/doc/mygdrive-rust/copyright"
 for document in README.md OAUTH_SETUP.md CHANGELOG.md LICENSE; do
     install -m 0644 "$document" "$package_dir/usr/share/doc/mygdrive-rust/$document"
 done
+for document in docs/PERFORMANCE.md docs/screenshots/*.png; do
+    install -Dm0644 "$document" "$package_dir/usr/share/doc/mygdrive-rust/$document"
+done
 for hook in postinst postrm; do
     install -m 0755 "packaging/debian/$hook" "$package_dir/DEBIAN/$hook"
 done

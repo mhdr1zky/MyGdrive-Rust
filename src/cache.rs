@@ -174,6 +174,21 @@ impl CacheStore {
 
     /// Removes only registered, complete, reproducible cache objects; never touches outbox/recovery.
     pub(crate) async fn prune(&self, max_bytes: u64) -> Result<EvictionReport> {
+        self.prune_selected(max_bytes, None).await
+    }
+
+    pub(crate) async fn remove_for_remote_ids(&self, ids: &HashSet<String>) -> Result<()> {
+        if !ids.is_empty() {
+            self.prune_selected(0, Some(ids)).await?;
+        }
+        Ok(())
+    }
+
+    async fn prune_selected(
+        &self,
+        max_bytes: u64,
+        ids: Option<&HashSet<String>>,
+    ) -> Result<EvictionReport> {
         let _guard = self.gate.write().await;
         let _policy = self.policy_gate.lock().await;
         let directory = self.root.join("cache");
@@ -185,7 +200,9 @@ impl CacheStore {
         let files = self.db.files().await?;
         let mut protected_ids: HashSet<_> = files
             .iter()
-            .filter(|file| file.review_required || file.status != "synced")
+            .filter(|file| {
+                file.review_required || !matches!(file.status.as_str(), "synced" | "online_only")
+            })
             .filter_map(|file| file.remote_id.clone())
             .collect();
         protected_ids.extend(
@@ -227,6 +244,8 @@ impl CacheStore {
                 .remote_id
                 .as_ref()
                 .is_none_or(|id| protected_ids.contains(id))
+                || ids
+                    .is_some_and(|ids| object.remote_id.as_ref().is_none_or(|id| !ids.contains(id)))
                 || protected_paths.contains(&object.snapshot.path)
             {
                 report.protected_bytes = report.protected_bytes.saturating_add(size);

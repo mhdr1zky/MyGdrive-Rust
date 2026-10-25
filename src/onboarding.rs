@@ -245,7 +245,7 @@ pub fn save_pair(base: &Path, state: &Path, root: &Path, folder: &Folder) -> Res
         account: "default".into(),
         root,
         drive_folder: folder.id.clone(),
-        interval_seconds: 30,
+        interval_seconds: crate::service::DEFAULT_POLL_SECONDS,
         cache_max_bytes: None,
     };
     config.validate()?;

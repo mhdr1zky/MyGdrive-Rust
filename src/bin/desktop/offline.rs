@@ -188,7 +188,13 @@ impl Ui {
                 "subtitle",
             ));
         }
-        self.feedback.set_text(if !live {"Mode baca inventaris terakhir. Mulai service untuk mengubah pilihan; Muat ulang memeriksa file lokal lagi."}else{"Pilihan tersimpan di profil ini. Folder mencakup seluruh anak yang dikenal dan file baru saat ditemukan. Unduhan menunggu online; saat dijeda, tekan Lanjutkan pada dashboard."});
+        self.feedback.set_text(if !live {
+            "Mode baca inventaris terakhir. Mulai service untuk mengubah pilihan; Muat ulang memeriksa file lokal lagi."
+        } else if page.service_paused {
+            "Service sedang dijeda. Pilihan tetap tersimpan; tekan Lanjutkan pada dashboard agar file/folder pilihan diunduh. Induk tidak perlu dipilih offline."
+        } else {
+            "File atau subfolder dapat dipilih sendiri meskipun induknya hanya online. Pilihan folder mencakup semua anak dan anak baru. Tunggu status file lokal tersedia sebelum memutus internet."
+        });
         *self.page.borrow_mut() = Some(page);
     }
 }
@@ -205,7 +211,7 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
     let content = column(10);
     content.add_css_class("content");
     content.append(&label("Tersedia offline", "title"));
-    let intro=label("Default hanya online. Pilih file/folder untuk mengunduh isinya agar bisa dibuka dan diedit tanpa internet.","subtitle");
+    let intro=label("Default hanya online. Pilih file atau subfolder secara mandiri; induknya tidak perlu dipilih. Memilih folder mengunduh seluruh isinya, termasuk subfolder dan anak baru.","subtitle");
     intro.set_wrap(true);
     content.append(&intro);
     let title = label("Memuat inventaris…", "status-title");
@@ -235,7 +241,12 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
         .min_content_height(160)
         .build();
     content.append(&scroll);
-    let notice=label("Konten diunduh saat dibuka melalui drive online atau dipilih offline. Melepas pin tetap menyimpan salinan lokal. Integrasi Thunar memakai mount FUSE terpisah; offline Google Docs/Sheets/Slides belum didukung.","notice");
+    let notice_text = if std::env::var_os("FLATPAK_ID").is_some() {
+        "Pilih tersedia offline untuk mengunduh konten ke folder lokal. Drive virtual dan menu Thunar tersedia pada paket .deb. Melepas pin mengantrekan pembersihan salinan bersih; perubahan tertunda dan file terbuka tetap dilindungi. File di Drive tetap ada. Offline Google Docs/Sheets/Slides belum didukung."
+    } else {
+        "Konten diunduh saat dibuka melalui drive online atau dipilih offline. Melepas pin mengantrekan pembersihan file bersih dan cache terkait; perubahan tertunda, file terbuka, dan pin yang masih berlaku tetap dilindungi. File di Drive tetap ada dan dapat diunduh kembali. Offline Google Docs/Sheets/Slides belum didukung."
+    };
+    let notice = label(notice_text, "notice");
     notice.set_wrap(true);
     content.append(&notice);
     let feedback = label("Menunggu inventaris service…", "subtitle");

@@ -64,12 +64,11 @@ pub async fn browse(state: &Path, parent: &str, offset: usize) -> Result<(Page, 
             });
             let reply = service::send(state, &request).await?;
             if reply.accepted {
-                return Ok((
-                    reply.offline.ok_or_else(|| {
-                        Error::Invalid("Restart service untuk mengaktifkan browser offline.".into())
-                    })?,
-                    true,
-                ));
+                let mut page = reply.offline.ok_or_else(|| {
+                    Error::Invalid("Restart service untuk mengaktifkan browser offline.".into())
+                })?;
+                page.service_paused = reply.status.paused;
+                return Ok((page, true));
             }
             return Err(Error::Invalid(
                 "Folder berubah atau service perlu dimulai ulang. Muat ulang inventaris.".into(),

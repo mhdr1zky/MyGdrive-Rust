@@ -165,6 +165,11 @@ impl Autostart {
     }
 }
 pub fn for_profile(state: &Path, binary: &Path) -> Result<Autostart> {
+    if std::env::var_os("FLATPAK_ID").is_some() {
+        return Err(Error::Unsupported(
+            "Mulai saat login belum tersedia pada paket Flatpak.".into(),
+        ));
+    }
     let dirs = directories::BaseDirs::new()
         .ok_or_else(|| Error::Invalid("user config directory unavailable".into()))?;
     let launcher = desktop_launcher(binary)?;

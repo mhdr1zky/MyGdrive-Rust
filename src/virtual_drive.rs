@@ -426,6 +426,87 @@ impl DriveFs {
         }
         Ok(())
     }
+    // Eviction takes an exclusive flock before moving a backing file out of
+    // the namespace. A shared lease lives on the open file description, so
+    // try_clone() also keeps pending reads, writes and close-time fsync safe.
+    fn protect_materialized_file(path: &Path, file: File) -> Result<Option<File>> {
+        match fs2::FileExt::try_lock_shared(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(None),
+            Err(error) => return Err(error.into()),
+        }
+        let opened = file.metadata()?;
+        if !opened.is_file() {
+            return Err(Error::Unsupported("not a regular file".into()));
+        }
+        let current = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        // An eviction may have won between open() and flock(). Never expose
+        // an unlinked/quarantined inode, especially through a writable handle.
+        if opened.nlink() == 0
+            || !current.is_file()
+            || opened.dev() != current.dev()
+            || opened.ino() != current.ino()
+        {
+            return Ok(None);
+        }
+        Ok(Some(file))
+    }
+    fn try_open_materialized_file(path: &Path, flags: i32) -> Result<Option<File>> {
+        let writable = flags & libc::O_ACCMODE != libc::O_RDONLY;
+        let file = match OpenOptions::new()
+            .read(flags & libc::O_ACCMODE != libc::O_WRONLY)
+            .write(writable)
+            .append(writable && flags & libc::O_APPEND != 0)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let Some(file) = Self::protect_materialized_file(path, file)? else {
+            return Ok(None);
+        };
+        // O_TRUNC in open() would modify bytes before obtaining the lease.
+        if writable && flags & libc::O_TRUNC != 0 {
+            file.set_len(0)?;
+        }
+        Ok(Some(file))
+    }
+    async fn open_materialized_file(
+        state: &Path,
+        entry: &Entry,
+        path: &Path,
+        flags: i32,
+        allow_hydration: bool,
+    ) -> Result<File> {
+        let mut retry_started = None;
+        loop {
+            if !path.try_exists()? {
+                if !allow_hydration {
+                    return Err(std::io::Error::from_raw_os_error(libc::EOPNOTSUPP).into());
+                }
+                if let Err(error) = Self::hydrate_file(state, entry, path).await {
+                    if !matches!(error, Error::Changed) {
+                        return Err(error);
+                    }
+                }
+            }
+            if let Some(file) = Self::try_open_materialized_file(path, flags)? {
+                return Ok(file);
+            }
+            if retry_started.get_or_insert_with(Instant::now).elapsed() >= Duration::from_secs(5) {
+                return Err(Error::Changed);
+            }
+            // Retry a missing/replaced path or a short eviction lease without
+            // blocking FUSE dispatch or retaining a stale backing descriptor.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
     async fn metadata_intent(
         state: &Path,
         entry: &Entry,
@@ -747,41 +828,13 @@ impl Filesystem for DriveFs {
         self.runtime.spawn(async move {
             let _permit = permit;
             let result: Result<OpenFile> = async {
-                if !path.try_exists()? {
-                    if flags & libc::O_ACCMODE == libc::O_RDONLY
-                        && (process_named(pid, &["tumblerd", "tumbler"])
-                            || (flags & libc::O_NOATIME != 0
-                                && process_named(pid, &["Thunar", "thunar"])))
-                    {
-                        return Err(std::io::Error::from_raw_os_error(libc::EOPNOTSUPP).into());
-                    }
-                    if e.unsupported {
-                        return Err(Error::Unsupported(
-                            "Google Workspace or download denied".into(),
-                        ));
-                    }
-                    let id = e.file_id.as_ref().ok_or(Error::Changed)?;
-                    let status = service::send(&state, &Request::new(Action::Status)).await?;
-                    let mut request = Request::new(Action::Hydrate);
-                    request.session_id = Some(status.status.session_id);
-                    request.offline = Some(crate::offline::Request::Hydrate {
-                        file_id: id.clone(),
-                    });
-                    if !service::send(&state, &request).await?.accepted {
-                        return Err(Error::Changed);
-                    }
-                }
+                let speculative = flags & libc::O_ACCMODE == libc::O_RDONLY
+                    && (process_named(pid, &["tumblerd", "tumbler"])
+                        || (flags & libc::O_NOATIME != 0
+                            && process_named(pid, &["Thunar", "thunar"])));
                 let writable = flags & libc::O_ACCMODE != libc::O_RDONLY;
-                let file = OpenOptions::new()
-                    .read(flags & libc::O_ACCMODE != libc::O_WRONLY)
-                    .write(writable)
-                    .append(writable && flags & libc::O_APPEND != 0)
-                    .truncate(writable && flags & libc::O_TRUNC != 0)
-                    .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-                    .open(path)?;
-                if !file.metadata()?.is_file() {
-                    return Err(Error::Unsupported("not a regular file".into()));
-                }
+                let file =
+                    Self::open_materialized_file(&state, &e, &path, flags, !speculative).await?;
                 Ok(OpenFile {
                     file,
                     writable,
@@ -947,7 +1000,8 @@ impl Filesystem for DriveFs {
                 .create_new(true)
                 .mode(0o600)
                 .custom_flags(libc::O_NOFOLLOW)
-                .open(real)?;
+                .open(&real)?;
+            let file = Self::protect_materialized_file(&real, file)?.ok_or(Error::Changed)?;
             file.sync_all()?;
             self.publish_created(&path, false);
             let e = self.view.target(&path)?.clone();
@@ -1203,14 +1257,19 @@ impl Filesystem for DriveFs {
                     }
                     file?
                 } else {
-                    if !entry.folder {
-                        Self::hydrate_file(&state, &entry, &path).await?;
+                    if entry.folder {
+                        OpenOptions::new()
+                            .read(true)
+                            .custom_flags(libc::O_NOFOLLOW)
+                            .open(&path)?
+                    } else {
+                        let flags = if size.is_some() {
+                            libc::O_RDWR
+                        } else {
+                            libc::O_RDONLY
+                        };
+                        Self::open_materialized_file(&state, &entry, &path, flags, true).await?
                     }
-                    OpenOptions::new()
-                        .read(true)
-                        .write(size.is_some())
-                        .custom_flags(libc::O_NOFOLLOW)
-                        .open(path)?
                 };
                 if let Some(size) = size {
                     file.set_len(size)?;
@@ -1279,6 +1338,110 @@ pub fn validate_mountpoint(mount: &Path, backing: &Path, state: &Path) -> Result
         ));
     }
     Ok(mount)
+}
+
+#[cfg(test)]
+mod eviction_lease_tests {
+    use super::*;
+
+    #[test]
+    fn open_file_lease_blocks_eviction_until_the_last_cloned_handle_closes() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("file.txt");
+        std::fs::write(&path, b"keep while open").unwrap();
+        for flags in [libc::O_RDONLY, libc::O_RDWR] {
+            let file = DriveFs::try_open_materialized_file(&path, flags)
+                .unwrap()
+                .unwrap();
+            let pending_io = file.try_clone().unwrap();
+            let eviction = File::open(&path).unwrap();
+            assert_eq!(
+                fs2::FileExt::try_lock_exclusive(&eviction)
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+            drop(file);
+            assert!(fs2::FileExt::try_lock_exclusive(&eviction).is_err());
+            drop(pending_io);
+            fs2::FileExt::try_lock_exclusive(&eviction).unwrap();
+        }
+    }
+
+    #[test]
+    fn contended_open_does_not_truncate_before_obtaining_the_file_lease() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("file.txt");
+        std::fs::write(&path, b"preserve these bytes").unwrap();
+        let eviction = File::open(&path).unwrap();
+        fs2::FileExt::try_lock_exclusive(&eviction).unwrap();
+        assert!(
+            DriveFs::try_open_materialized_file(&path, libc::O_WRONLY | libc::O_TRUNC)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"preserve these bytes");
+        drop(eviction);
+        let file = DriveFs::try_open_materialized_file(&path, libc::O_WRONLY | libc::O_TRUNC)
+            .unwrap()
+            .unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn pending_open_rejects_a_quarantined_replaced_or_unlinked_inode() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("file.txt");
+        std::fs::write(&path, b"original").unwrap();
+        let pending = File::open(&path).unwrap();
+        std::fs::rename(&path, temp.path().join("quarantine")).unwrap();
+        assert!(DriveFs::protect_materialized_file(&path, pending)
+            .unwrap()
+            .is_none());
+
+        std::fs::write(&path, b"replacement").unwrap();
+        let old = File::open(temp.path().join("quarantine")).unwrap();
+        assert!(DriveFs::protect_materialized_file(&path, old)
+            .unwrap()
+            .is_none());
+        let removed = File::open(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(DriveFs::protect_materialized_file(&path, removed)
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_open_retries_after_a_short_eviction_lease() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("file.txt");
+        std::fs::write(&path, b"available again").unwrap();
+        let eviction = File::open(&path).unwrap();
+        fs2::FileExt::try_lock_exclusive(&eviction).unwrap();
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            drop(eviction);
+        });
+        let entry = Entry {
+            path: "file.txt".into(),
+            key: "r:file".into(),
+            folder: false,
+            size: 15,
+            file_id: None,
+            unsupported: false,
+        };
+        let file = tokio::time::timeout(
+            Duration::from_secs(2),
+            DriveFs::open_materialized_file(temp.path(), &entry, &path, libc::O_RDONLY, false),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut bytes = [0; 15];
+        assert_eq!(file.read_at(&mut bytes, 0).unwrap(), bytes.len());
+        assert_eq!(&bytes, b"available again");
+        release.await.unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -1384,6 +1547,22 @@ mod responsiveness_tests {
         assert!(!fs.nodes.contains_key(&previous_inode));
         assert!(!fs.view.entries.contains_key("save.tmp"));
         assert_eq!(fs.children[""], vec!["local.txt"]);
+    }
+
+    #[test]
+    fn office_working_files_remain_usable_in_the_mount_and_promote_to_documents() {
+        let (_temp, mut fs) = fixture();
+        fs.publish_created("~WRD1234.tmp", false);
+        fs.publish_created("~$report.docx", false);
+        let working_inode = fs.inodes["p:~WRD1234.tmp"];
+        assert!(fs.entry(working_inode).is_ok());
+        assert!(fs.view.target("~$report.docx").is_ok());
+        fs.publish_rename("~WRD1234.tmp", "report.docx");
+        assert_eq!(fs.inodes["p:report.docx"], working_inode);
+        assert!(fs.view.target("~WRD1234.tmp").is_err());
+        assert!(fs.view.target("report.docx").is_ok());
+        fs.publish_removed("~$report.docx");
+        assert!(fs.view.target("~$report.docx").is_err());
     }
 
     #[test]
