@@ -1,5 +1,13 @@
 # Catatan rilis
 
+## v1.0.3 — 25 Oktober 2026
+
+- Pembaruan desktop otomatis dari GitHub Releases untuk `.deb` amd64 dan
+  AppImage x86_64: pemeriksaan enam jam, unduhan terverifikasi SHA-256,
+  penggantian AppImage atomik, dan pemasangan `.deb` melalui autentikasi
+  administrator Linux. Status tampil di sidebar; versi baru dipakai setelah
+  membuka ulang aplikasi/service. Build source dan mode snapshot dikecualikan.
+
 ## v1.0.2 — 25 Oktober 2026
 
 - Kegagalan izin saat membaca metadata satu file tidak lagi menghentikan

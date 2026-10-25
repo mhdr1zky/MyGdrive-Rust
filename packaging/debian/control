@@ -6,7 +6,7 @@ Rules-Requires-Root: no
 
 Package: mygdrive-rust
 Architecture: any
-Depends: @DEPENDS@, fuse3, python3, xdg-utils
+Depends: @DEPENDS@, fuse3, python3, xdg-utils, pkexec, apt
 Recommends: gvfs, libnotify-bin
 Suggests: thunar, zenity
 Description: Google Drive desktop client written in Rust

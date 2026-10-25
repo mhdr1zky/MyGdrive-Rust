@@ -15,6 +15,8 @@ mod offline;
 mod progress;
 #[path = "desktop/setup.rs"]
 mod setup;
+#[path = "desktop/updater.rs"]
+mod updater;
 
 #[derive(Parser)]
 #[command(about = "MyGdrive Rust desktop dashboard")]
@@ -283,6 +285,32 @@ fn build(
     let autostart = gtk::CheckButton::with_label("Mulai saat login");
     autostart.set_sensitive(false);
     sidebar.append(&autostart);
+    if !snapshot_mode {
+        if let Some(path) = updater::status_path() {
+            let update_status = label("Pembaruan otomatis aktif", "sidebar-note");
+            update_status.set_wrap(true);
+            update_status.set_max_width_chars(24);
+            if std::env::var_os("MYGDRIVE_DISABLE_AUTO_UPDATE").is_some() {
+                update_status.set_text("Pembaruan otomatis dinonaktifkan");
+            } else {
+                let weak = update_status.downgrade();
+                glib::timeout_add_local(Duration::from_secs(5), move || {
+                    let Some(label) = weak.upgrade() else {
+                        return glib::ControlFlow::Break;
+                    };
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        if let Ok(status) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if let Some(message) = status["message"].as_str() {
+                                label.set_text(message);
+                            }
+                        }
+                    }
+                    glib::ControlFlow::Continue
+                });
+            }
+            sidebar.append(&update_status);
+        }
+    }
     let exit = gtk::Button::with_label("Keluar");
     exit.set_tooltip_text(Some(
         "Hentikan sinkronisasi profil ini dengan tertib, kemudian keluar.",
@@ -811,6 +839,9 @@ fn build(
 }
 fn main() -> glib::ExitCode {
     let args = Args::parse();
+    if args.snapshot.is_none() {
+        updater::start();
+    }
     let state = args.state.unwrap_or_else(|| {
         directories::BaseDirs::new()
             .expect("user data directory")
