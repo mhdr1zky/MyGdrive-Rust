@@ -1,5 +1,8 @@
+use gtk::{glib, prelude::*};
 use sha2::{Digest, Sha256};
-use std::{path::PathBuf, process::Command, time::Duration};
+use std::{path::PathBuf, process::Command, sync::mpsc, time::Duration};
+
+const RELEASES: &str = "https://github.com/mhdr1zky/MyGdrive-Rust/releases/latest";
 
 fn installation() -> Option<(&'static str, PathBuf)> {
     let executable = std::env::current_exe().ok()?;
@@ -9,48 +12,214 @@ fn installation() -> Option<(&'static str, PathBuf)> {
             return Some(("appimage", PathBuf::from(image)));
         }
     }
-    (executable == std::path::Path::new("/usr/lib/mygdrive-rust/bin/mygdrive-desktop"))
-        .then(|| ("deb", PathBuf::from("/usr/lib/mygdrive-rust")))
+    if executable == std::path::Path::new("/usr/lib/mygdrive-rust/bin/mygdrive-desktop") {
+        Some(("deb", PathBuf::from("/usr/lib/mygdrive-rust")))
+    } else {
+        Some(("source", executable))
+    }
 }
 
-pub fn status_path() -> Option<PathBuf> {
-    let (kind, target) = installation()?;
-    let identity = format!("{kind}:{}", target.display());
-    let digest = format!("{:x}", Sha256::digest(identity.as_bytes()));
-    Some(
-        directories::BaseDirs::new()?
-            .data_local_dir()
-            .join("mygdrive/updates")
-            .join(&digest[..16])
-            .join("status.json"),
-    )
+#[derive(Clone)]
+enum Request {
+    Check,
+    Install(String),
 }
 
-pub fn start() {
+/// Network, status files and package operations run outside the GTK main thread.
+/// The periodic path can only check; installation requires a button request.
+pub fn panel(snapshot_mode: bool) -> gtk::Box {
+    let panel = super::card();
+    panel.append(&super::label("APLIKASI", "eyebrow"));
+    panel.append(&super::label(
+        &format!("MyGdrive Rust  ·  v{}", env!("CARGO_PKG_VERSION")),
+        "detail",
+    ));
+    let message = super::label("Memeriksa rilis GitHub…", "subtitle");
+    panel.append(&message);
+    let actions = super::flow();
+    let check = gtk::Button::with_label("Periksa pembaruan");
+    let install = gtk::Button::with_label("Update sekarang");
+    install.add_css_class("suggested-action");
+    install.set_visible(false);
+    let release = gtk::LinkButton::with_label(RELEASES, "Catatan rilis ↗");
+    actions.insert(&check, -1);
+    actions.insert(&install, -1);
+    if let Some(child) = install.parent() {
+        child.set_visible(false);
+    }
+    actions.insert(&release, -1);
+    panel.append(&actions);
+    panel.append(&super::label(
+        "Pemasangan dimulai hanya saat Anda memilih Update sekarang.",
+        "subtitle",
+    ));
+    if snapshot_mode {
+        message.set_text("Status rilis akan diperiksa saat aplikasi dibuka.");
+        check.set_sensitive(false);
+        release.set_sensitive(false);
+        return panel;
+    }
     if std::env::var_os("MYGDRIVE_DISABLE_AUTO_UPDATE").is_some() {
-        return;
+        message.set_text("Pemeriksaan pembaruan dinonaktifkan melalui pengaturan lingkungan.");
+        check.set_sensitive(false);
+        return panel;
     }
     let Some((kind, target)) = installation() else {
-        return;
+        return panel;
     };
-    let Some(status) = status_path() else {
-        return;
+    let Some(base) = directories::BaseDirs::new() else {
+        return panel;
     };
-    // All network, disk and authentication work stays off the GTK main thread.
-    let _ = std::thread::Builder::new()
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(format!("{kind}:{}", target.display()).as_bytes())
+    );
+    let path = base
+        .data_local_dir()
+        .join("mygdrive/updates")
+        .join(&digest[..16])
+        .join("status.json");
+    let (requests, receiver) = mpsc::sync_channel(1);
+    let (events, results) = mpsc::channel::<serde_json::Value>();
+    check.set_sensitive(false);
+    let worker = std::thread::Builder::new()
         .name("github-updater".into())
-        .spawn(move || loop {
-            let result = Command::new("python3")
-                .args(["-c", include_str!("../../../scripts/auto-update.py")])
-                .args(["--kind", kind, "--version", env!("CARGO_PKG_VERSION")])
-                .arg("--target")
-                .arg(&target)
-                .arg("--status")
-                .arg(&status)
-                .status();
-            if let Err(error) = result {
-                eprintln!("Tidak dapat menjalankan updater: {error}");
+        .spawn(move || {
+            let mut request = None;
+            loop {
+                let mut command = Command::new("python3");
+                command
+                    .args(["-c", include_str!("../../../scripts/auto-update.py")])
+                    .args(["--kind", kind, "--version", env!("CARGO_PKG_VERSION")])
+                    .arg("--target")
+                    .arg(&target)
+                    .arg("--status")
+                    .arg(&path);
+                match &request {
+                    Some(Request::Install(version)) => {
+                        command.args(["--install", "--expected-version", version]);
+                    }
+                    Some(Request::Check) => {
+                        command.arg("--force");
+                    }
+                    None => {}
+                }
+                let mut failed = None;
+                let mut reported = false;
+                match command.spawn() {
+                    Ok(mut child) => loop {
+                        let done = match child.try_wait() {
+                            Ok(Some(status)) => {
+                                if !status.success() {
+                                    failed = Some("Pemeriksaan gagal. Pastikan Python 3 tersedia.");
+                                }
+                                true
+                            }
+                            Ok(None) => false,
+                            Err(_) => {
+                                failed = Some("Status proses pembaruan tidak dapat dibaca.");
+                                true
+                            }
+                        };
+                        if let Ok(text) = std::fs::read_to_string(&path) {
+                            if let Ok(mut status) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text)
+                            {
+                                reported = true;
+                                status.insert("busy".into(), (!done).into());
+                                if events.send(serde_json::Value::Object(status)).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        if done {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(500));
+                    },
+                    Err(_) => {
+                        failed = Some("Updater tidak dapat dimulai. Pastikan Python 3 tersedia.")
+                    }
+                }
+                if !reported && failed.is_none() {
+                    failed = Some("Status pembaruan belum tersedia. Tekan Periksa pembaruan untuk mencoba lagi.");
+                }
+                if let Some(error) = failed {
+                    if events
+                        .send(serde_json::json!({"phase":"error", "message":error}))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                request = match receiver.recv_timeout(Duration::from_secs(15 * 60)) {
+                    Ok(request) => Some(request),
+                    Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                };
             }
-            std::thread::sleep(Duration::from_secs(15 * 60));
         });
+    if worker.is_err() {
+        message.set_text("Worker pembaruan tidak dapat dimulai. Buka ulang aplikasi.");
+        return panel;
+    }
+    let selected = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
+    let commands = requests.clone();
+    let pending_check = check.clone();
+    let pending_install = install.clone();
+    let feedback = message.clone();
+    check.connect_clicked(move |_| {
+        if commands.try_send(Request::Check).is_ok() {
+            pending_check.set_sensitive(false);
+            pending_install.set_sensitive(false);
+            feedback.set_text("Memeriksa rilis GitHub…");
+        }
+    });
+    let manual = std::rc::Rc::new(std::cell::Cell::new(false));
+    let manual_action = manual.clone();
+    let version = selected.clone();
+    let pending_check = check.clone();
+    let feedback = message.clone();
+    install.connect_clicked(move |button| {
+        if manual_action.get() {
+            super::launch_uri(RELEASES, &feedback);
+            return;
+        }
+        if let Some(version) = version.borrow().as_ref() {
+            if requests.try_send(Request::Install(version.clone())).is_ok() {
+                button.set_sensitive(false);
+                pending_check.set_sensitive(false);
+                feedback.set_text("Menyiapkan pembaruan yang Anda pilih…");
+            }
+        }
+    });
+    let weak = panel.downgrade();
+    glib::timeout_add_local(Duration::from_millis(250), move || {
+        if weak.upgrade().is_none() {
+            return glib::ControlFlow::Break;
+        }
+        while let Ok(status) = results.try_recv() {
+            message.set_text(
+                status["message"]
+                    .as_str()
+                    .unwrap_or("Status pembaruan belum tersedia."),
+            );
+            let busy = status["busy"].as_bool().unwrap_or(false);
+            let is_manual = status["phase"] == "manual";
+            manual.set(is_manual);
+            install.set_tooltip_text(Some(if is_manual { "Buka rilis GitHub untuk memilih paket instalasi." } else { "Unduh, verifikasi, lalu pasang versi yang tersedia. Paket .deb meminta izin administrator." }));
+            let available = status["phase"] == "available" || is_manual;
+            *selected.borrow_mut() = status["available_version"]
+                .as_str()
+                .filter(|_| available)
+                .map(str::to_owned);
+            install.set_visible(available);
+            if let Some(child) = install.parent() {
+                child.set_visible(available);
+            }
+            install.set_sensitive(available && !busy);
+            check.set_sensitive(!busy);
+        }
+        glib::ControlFlow::Continue
+    });
+    panel
 }

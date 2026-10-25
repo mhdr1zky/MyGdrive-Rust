@@ -50,8 +50,65 @@ class UpdateTests(unittest.TestCase):
 
     def perform(self, state=None):
         state = {} if state is None else state
-        UPDATER.perform('appimage', self.target, '1.0.2', state, self.status)
+        UPDATER.perform('appimage', self.target, '1.0.2', state, self.status,
+                        install=True, expected_version='1.1.0')
         return state
+
+    def test_default_check_never_downloads_or_installs(self):
+        state = {}
+        with mock.patch.object(UPDATER, 'install_deb') as install:
+            UPDATER.perform('appimage', self.target, '1.0.2', state, self.status)
+        self.assertEqual(state['phase'], 'available')
+        self.assertEqual(state['available_version'], '1.1.0')
+        self.assertEqual(self.fetch.call_count, 1)
+        install.assert_not_called()
+        self.assertEqual(self.target.read_bytes(), b'old application')
+
+    def test_deb_check_does_not_download_or_request_authentication(self):
+        self.name = 'mygdrive-rust_1.1.0_amd64.deb'
+        self.release['assets'][0].update(name=self.name,
+            browser_download_url=f'https://github.com/{UPDATER.REPO}/releases/download/v1.1.0/{self.name}')
+        state = {}
+        with mock.patch.object(UPDATER.subprocess, 'check_output', return_value='1.0.2'), \
+                mock.patch.object(UPDATER, 'install_deb') as install:
+            UPDATER.perform('deb', self.target, '1.0.2', state, self.status)
+        self.assertEqual(state['phase'], 'available')
+        self.assertEqual(self.fetch.call_count, 1)
+        install.assert_not_called()
+
+    def test_periodic_run_never_installs_even_with_legacy_state(self):
+        UPDATER.save_state(self.status, {'available_version': '1.1.0'})
+        args = argparse.Namespace(kind='appimage', target=self.target, version='1.0.2',
+                                  status=self.status, force=True)
+        with mock.patch.object(UPDATER.os, 'geteuid', return_value=1000):
+            UPDATER.run(args)
+        self.assertEqual(UPDATER.read_state(self.status)['phase'], 'available')
+        self.assertEqual(self.fetch.call_count, 1)
+        self.assertEqual(self.target.read_bytes(), b'old application')
+
+    def test_changed_release_requires_another_user_decision(self):
+        with self.assertRaisesRegex(ValueError, 'Rilis berubah'):
+            UPDATER.perform('appimage', self.target, '1.0.2', {}, self.status,
+                            install=True, expected_version='1.0.9')
+        self.assertEqual(self.fetch.call_count, 1)
+        self.assertEqual(self.target.read_bytes(), b'old application')
+
+    def test_source_build_checks_release_without_installation(self):
+        state = {}
+        UPDATER.perform('source', self.target, '1.0.2', state, self.status)
+        self.assertEqual(state['phase'], 'manual')
+        self.assertEqual(state['available_version'], '1.1.0')
+        self.assertEqual(self.fetch.call_count, 1)
+
+    def test_explicit_install_ignores_check_schedule(self):
+        UPDATER.save_state(self.status, {'next_check': UPDATER.time.time() + 3600})
+        args = argparse.Namespace(kind='appimage', target=self.target, version='1.0.2',
+                                  status=self.status, force=False, install=True,
+                                  expected_version='1.1.0')
+        with mock.patch.object(UPDATER.os, 'geteuid', return_value=1000):
+            UPDATER.run(args)
+        self.assertEqual(self.target.read_bytes(), self.payload)
+        self.assertEqual(UPDATER.read_state(self.status)['phase'], 'installed')
 
     def test_atomic_appimage_update_keeps_path_permissions_and_cleans_staging(self):
         state = self.perform()
@@ -178,7 +235,7 @@ class UpdateTests(unittest.TestCase):
             UPDATER.run(args)
         state = UPDATER.read_state(self.status)
         self.assertGreater(state['next_check'], UPDATER.time.time() + UPDATER.INTERVAL - 5)
-        self.assertIn('belum terpasang', state['message'])
+        self.assertIn('belum berhasil', state['message'])
 
     def test_malformed_state_can_recover(self):
         for content in ('invalid', '[]', 'null'):

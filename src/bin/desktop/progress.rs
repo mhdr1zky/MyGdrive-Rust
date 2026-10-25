@@ -1,4 +1,4 @@
-use super::{column, label, row};
+use super::{card, column, flow, label, row};
 use gtk::{gio, prelude::*};
 use mygdrive_sync::dashboard::{ActivityItem, ActivityPage, Snapshot};
 use std::{
@@ -25,32 +25,37 @@ impl Popup {
     pub fn new(parent: &gtk::ApplicationWindow, snapshot_mode: bool) -> Self {
         let window = gtk::Window::builder()
             .title("Aktivitas sinkronisasi · MyGdrive Rust")
-            .default_width(440)
-            .default_height(430)
-            .resizable(false)
+            .default_width(560)
+            .default_height(580)
+            .resizable(true)
             .hide_on_close(true)
             .build();
         window.set_application(parent.application().as_ref());
         let content = column(12);
         content.add_css_class("content");
-        content.append(&label("Aktivitas sinkronisasi", "status-title"));
+        content.append(&label("TRANSFER & RIWAYAT", "eyebrow"));
+        content.append(&label("Aktivitas sinkronisasi", "title"));
+        let health = card();
+        health.add_css_class("hero");
         let status = label("Menunggu status layanan…", "detail");
         status.set_wrap(true);
-        content.append(&status);
+        health.append(&status);
         let summary = label("Belum ada aktivitas.", "subtitle");
         summary.set_wrap(true);
-        content.append(&summary);
+        health.append(&summary);
         let bar = gtk::ProgressBar::new();
-        content.append(&bar);
+        health.append(&bar);
+        content.append(&health);
+        content.append(&label("AKTIVITAS FILE TERBARU", "eyebrow"));
         let list = column(8);
         let scroll = gtk::ScrolledWindow::builder()
-            .min_content_height(230)
+            .min_content_height(120)
             .vexpand(true)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .child(&list)
             .build();
         content.append(&scroll);
-        let buttons = row();
+        let buttons = flow();
         let dashboard = gtk::Button::with_label("Buka dashboard");
         let weak = parent.downgrade();
         dashboard.connect_clicked(move |_| {
@@ -65,8 +70,9 @@ impl Popup {
                 window.set_visible(false);
             }
         });
-        buttons.append(&dashboard);
-        buttons.append(&close);
+        dashboard.add_css_class("suggested-action");
+        buttons.insert(&dashboard, -1);
+        buttons.insert(&close, -1);
         content.append(&buttons);
         window.set_child(Some(&content));
         Self {
@@ -107,7 +113,7 @@ impl Popup {
         };
         self.status.set_text(message);
         self.summary.set_text(&format!(
-            "{} file menunggu · {} penghapusan file · {} operasi dicoba ulang",
+            "Menunggu: {} file  ·  Penghapusan: {}  ·  Dicoba ulang: {}",
             self.pending_count.get(),
             self.delete_count.get(),
             self.retry_count.get()
@@ -136,31 +142,36 @@ impl Popup {
                 self.list.remove(&child);
             }
             if items.is_empty() {
-                self.list
-                    .append(&label("Belum ada riwayat operasi file.", "subtitle"));
+                self.list.append(&label(
+                    "Belum ada aktivitas file. Riwayat akan muncul setelah file disinkronkan.",
+                    "notice",
+                ));
             }
             for item in items {
                 let card = column(4);
                 card.add_css_class("card");
-                let name = label(
-                    &format!(
-                        "{}  {}",
-                        if item.pending {
-                            if item.retrying {
-                                "!"
-                            } else {
-                                "↻"
-                            }
-                        } else {
-                            "✓"
-                        },
-                        item.path
-                    ),
-                    "detail",
-                );
+                let heading = row();
+                let name = label(&item.path, "detail");
+                name.set_hexpand(true);
                 name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
                 name.set_tooltip_text(Some(&item.path));
-                card.append(&name);
+                heading.append(&name);
+                let badge = label(
+                    if item.retrying {
+                        "Dicoba ulang"
+                    } else if item.pending {
+                        "Menunggu"
+                    } else {
+                        "Selesai"
+                    },
+                    "pill",
+                );
+                badge.set_valign(gtk::Align::Start);
+                if item.pending {
+                    badge.add_css_class("warning");
+                }
+                heading.append(&badge);
+                card.append(&heading);
                 let detail = label(&format!("{} · {}", item.operation, item.detail), "subtitle");
                 detail.set_wrap(true);
                 card.append(&detail);

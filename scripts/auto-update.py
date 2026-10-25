@@ -1,4 +1,4 @@
-"""Packaged desktop updater. Invoked by the desktop worker, never as root."""
+"""Check releases by default; install only after an explicit desktop request."""
 import argparse
 import fcntl
 import hashlib
@@ -104,29 +104,47 @@ def install_deb(package, release_version, log_path=None):
                        stdout=log, stderr=subprocess.STDOUT)
 
 
-def perform(kind, target, current, state, status_path):
-    if platform.machine() not in ('x86_64', 'amd64'):
-        raise ValueError('Pembaruan otomatis tersedia untuk x86_64/amd64')
+def perform(kind, target, current, state, status_path, install=False, expected_version=None):
+    running = current
     if kind == 'deb':
         current = subprocess.check_output(
             ['/usr/bin/dpkg-query', '-W', '-f=${Version}', 'mygdrive-rust'], text=True).strip()
-    elif state.get('fingerprint') == fingerprint(target):
+    elif kind == 'appimage' and state.get('fingerprint') == fingerprint(target):
         current = state.get('installed_version', current)
+    state.update(phase='checking', available_version=None, current_version=current,
+                 message='Memeriksa rilis GitHub…')
+    save_state(status_path, state)
     release = json.loads(fetch(API, 2 * 1024 * 1024)[0])
     if release.get('draft') or release.get('prerelease'):
         raise ValueError('Rilis belum stabil')
     latest = release['tag_name'].removeprefix('v')
     if version(latest) <= version(current):
-        state.update(message=f'Versi {current} sudah terbaru.', next_check=time.time() + INTERVAL)
+        restart = version(current) > version(running)
+        state.update(phase='installed' if restart else 'current',
+                     message=(f'Versi {current} terpasang. Buka ulang aplikasi dan layanan untuk menggunakannya.'
+                              if restart else f'Versi {current} sudah terbaru.'),
+                     next_check=time.time() + INTERVAL)
+        return
+    if kind == 'source' or platform.machine() not in ('x86_64', 'amd64'):
+        state.update(phase='manual', available_version=latest,
+                     message=f'Versi {latest} tersedia. Unduh paket yang sesuai dari halaman rilis.',
+                     next_check=time.time() + INTERVAL)
         return
     suffix = 'amd64.deb' if kind == 'deb' else 'x86_64.AppImage'
     name = f'mygdrive-rust_{latest}_{suffix}'
     url, size = asset_url(release, name)
     manifest_url, _ = asset_url(release, 'SHA256SUMS')
-    expected = checksum(fetch(manifest_url, 1024 * 1024)[0], name)
     if not 0 < size <= MAX_PACKAGE:
         raise ValueError('Ukuran paket tidak valid')
-    state.update(message=f'Mengunduh pembaruan {latest}…')
+    state.update(phase='available', available_version=latest,
+                 message=f'Versi {latest} tersedia. Anda menentukan kapan memperbarui.',
+                 next_check=time.time() + INTERVAL)
+    if not install:
+        return
+    if expected_version != latest:
+        raise ValueError('Rilis berubah. Periksa versi yang tersedia lalu tekan Update sekarang lagi.')
+    expected = checksum(fetch(manifest_url, 1024 * 1024)[0], name)
+    state.update(phase='downloading', message=f'Mengunduh pembaruan {latest}…')
     save_state(status_path, state)
     # AppImage staging must share a filesystem with its destination for atomic replacement.
     directory = target.parent if kind == 'appimage' else status_path.parent
@@ -139,7 +157,7 @@ def perform(kind, target, current, state, status_path):
             os.fsync(output.fileno())
         if downloaded != size or actual != expected:
             raise ValueError('Verifikasi SHA-256/ukuran gagal; paket tidak dipasang')
-        state.update(message=f'Memasang pembaruan {latest}…')
+        state.update(phase='installing', message=f'Memasang pembaruan {latest}…')
         save_state(status_path, state)
         if kind == 'deb':
             install_deb(package, latest, status_path.with_name('install.log'))
@@ -150,7 +168,7 @@ def perform(kind, target, current, state, status_path):
             package.chmod(mode | stat.S_IXUSR)
             os.replace(package, target)
             state['fingerprint'] = fingerprint(target)
-    state.update(installed_version=latest, next_check=time.time() + INTERVAL,
+    state.update(phase='installed', available_version=None, installed_version=latest, next_check=time.time() + INTERVAL,
                  message=f'Pembaruan {latest} terpasang. Buka ulang aplikasi untuk memakai versi baru.')
 
 
@@ -164,13 +182,15 @@ def run(args):
         except BlockingIOError:
             return
         state = read_state(args.status)
-        if not args.force and time.time() < state.get('next_check', 0):
+        install = getattr(args, 'install', False)
+        if not args.force and not install and time.time() < state.get('next_check', 0):
             return
         try:
-            perform(args.kind, args.target, args.version, state, args.status)
+            perform(args.kind, args.target, args.version, state, args.status,
+                    install=install, expected_version=getattr(args, 'expected_version', None))
         except Exception as error:
-            state.update(next_check=time.time() + RETRY,
-                         message=f'Pembaruan belum terpasang: {error}')
+            state.update(phase='error', available_version=None, next_check=time.time() + RETRY,
+                         message=f'Pembaruan belum berhasil: {error}')
             # A dismissed authentication prompt must not reappear every 30 minutes.
             if isinstance(error, subprocess.CalledProcessError):
                 state['next_check'] = time.time() + INTERVAL
@@ -180,9 +200,11 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--kind', choices=['deb', 'appimage'], required=True)
+    parser.add_argument('--kind', choices=['deb', 'appimage', 'source'], required=True)
     parser.add_argument('--target', type=Path, required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--status', type=Path, required=True)
     parser.add_argument('--force', action='store_true')
+    parser.add_argument('--install', action='store_true', help='Install only on explicit user request')
+    parser.add_argument('--expected-version', help='Release version selected by the user')
     run(parser.parse_args())

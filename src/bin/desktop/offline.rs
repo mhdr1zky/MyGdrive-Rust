@@ -1,4 +1,4 @@
-use super::{column, label, launch_uri, row, time_text};
+use super::{column, flow, label, launch_uri, row, time_text};
 use gtk::{glib, prelude::*};
 use mygdrive_sync::{
     offline::{Node, Page},
@@ -210,8 +210,10 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
     window.set_destroy_with_parent(true);
     let content = column(10);
     content.add_css_class("content");
-    content.append(&label("Tersedia offline", "title"));
-    let intro=label("Default hanya online. Pilih file atau subfolder secara mandiri; induknya tidak perlu dipilih. Memilih folder mengunduh seluruh isinya, termasuk subfolder dan anak baru.","subtitle");
+    let heading = label("Tersedia offline", "title");
+    heading.set_focusable(true);
+    content.append(&heading);
+    let intro=label("Pilih file atau folder untuk digunakan tanpa internet. Memilih folder juga mengunduh seluruh isinya.","subtitle");
     intro.set_wrap(true);
     content.append(&intro);
     let title = label("Memuat inventaris…", "status-title");
@@ -220,14 +222,14 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
     let summary = label("Memeriksa file lokal…", "detail");
     summary.set_wrap(true);
     content.append(&summary);
-    let nav = row();
+    let nav = flow();
     let back = gtk::Button::with_label("Naik");
     let reload = gtk::Button::with_label("Muat ulang");
     let next = gtk::Button::with_label("Halaman berikutnya");
     let open = gtk::Button::with_label("Buka folder lokal");
     for b in [&back, &reload, &next, &open] {
         b.set_sensitive(false);
-        nav.append(b);
+        nav.insert(b, -1);
     }
     content.append(&nav);
     let current_pin = gtk::Button::with_label("Jadikan folder ini tersedia offline");
@@ -236,6 +238,7 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
     content.append(&current_pin);
     let list = column(8);
     let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&list)
         .vexpand(true)
         .min_content_height(160)
@@ -248,7 +251,9 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
     };
     let notice = label(notice_text, "notice");
     notice.set_wrap(true);
-    content.append(&notice);
+    let help = gtk::Expander::new(Some("Cara kerja pilihan offline"));
+    help.set_child(Some(&notice));
+    content.append(&help);
     let feedback = label("Menunggu inventaris service…", "subtitle");
     feedback.set_wrap(true);
     content.append(&feedback);
@@ -400,5 +405,6 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
         glib::ControlFlow::Continue
     });
     window.present();
+    heading.grab_focus();
     window
 }

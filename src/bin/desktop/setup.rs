@@ -1,4 +1,4 @@
-use super::{column, label, row};
+use super::{card, column, flow, label};
 use gtk::{glib, prelude::*};
 use mygdrive_sync::onboarding::{self, Command, Event, FolderPage};
 use std::{
@@ -151,6 +151,11 @@ impl Ui {
         for folder in page.files {
             let button = gtk::Button::with_label(&format!("📁  {}", folder.name));
             button.set_halign(gtk::Align::Fill);
+            if let Some(text) = button.child().and_downcast::<gtk::Label>() {
+                text.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+                text.set_max_width_chars(45);
+                text.set_xalign(0.0);
+            }
             let weak = Rc::downgrade(self);
             button.connect_clicked(move |_| {
                 if let Some(ui) = weak.upgrade() {
@@ -191,64 +196,79 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
     window.set_destroy_with_parent(true);
     let content = column(8);
     content.add_css_class("content");
-    content.append(&label("Akun dan folder", "title"));
-    let intro=label("Akun tersimpan dimuat otomatis. Lihat email dan target sinkronisasi aktif, atau hubungkan akun baru untuk membuat pasangan folder terpisah.","subtitle");
+    let heading = label("Akun dan folder", "title");
+    heading.set_focusable(true);
+    content.append(&heading);
+    let intro = label(
+        "Hubungkan akun Google dan tentukan folder yang ingin Anda sinkronkan.",
+        "subtitle",
+    );
     intro.set_wrap(true);
     content.append(&intro);
+    let account_card = card();
+    account_card.append(&label("AKUN GOOGLE", "eyebrow"));
     let profiles_box = column(6);
     let profiles_expander = gtk::Expander::new(Some("Akun tersimpan — pilih untuk melihat folder"));
     profiles_expander.set_child(Some(&profiles_box));
     profiles_expander.set_expanded(true);
-    content.append(&profiles_expander);
-    let login_row = row();
+    account_card.append(&profiles_expander);
+    let login_row = flow();
     let login = gtk::Button::with_label("Hubungkan akun baru…");
     login.add_css_class("suggested-action");
     let reauth = gtk::Button::with_label("Login ulang akun terpilih");
-    login_row.append(&login);
-    login_row.append(&reauth);
-    content.append(&login_row);
+    login_row.insert(&login, -1);
+    login_row.insert(&reauth, -1);
+    account_card.append(&login_row);
     let account = label("Memeriksa akun tersimpan…", "detail");
     account.set_selectable(true);
-    content.append(&account);
+    account.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    account_card.append(&account);
     let target = label("Belum ada pasangan folder tersimpan.", "subtitle");
     target.set_wrap(true);
-    content.append(&target);
+    account_card.append(&target);
+    content.append(&account_card);
+    let drive_card = card();
     let scope=label("Pilih My Drive untuk menampilkan seluruh drive, atau subfolder untuk membatasi tampilan. Konten diunduh saat dibuka atau dipilih tersedia offline. Profil baru tetap terpisah dari profil aktif.","subtitle");
     scope.set_wrap(true);
-    content.append(&scope);
-    content.append(&label("1 · FOLDER GOOGLE DRIVE", "eyebrow"));
+    drive_card.append(&label("1 · FOLDER GOOGLE DRIVE", "eyebrow"));
+    drive_card.append(&scope);
+
     let breadcrumb = label("My Drive", "detail");
     breadcrumb.set_wrap(true);
-    content.append(&breadcrumb);
-    let nav = row();
+    drive_card.append(&breadcrumb);
+    let nav = flow();
     let back = gtk::Button::with_label("Naik");
     let reload = gtk::Button::with_label("Muat folder");
     let next_button = gtk::Button::with_label("Halaman berikutnya");
     for b in [&back, &reload, &next_button] {
-        nav.append(b);
+        nav.insert(b, -1);
     }
-    content.append(&nav);
+    drive_card.append(&nav);
     let folders = gtk::ListBox::new();
     folders.set_selection_mode(gtk::SelectionMode::None);
     folders.add_css_class("boxed-list");
     folders.append(&label("Hubungkan akun untuk melihat folder.", "subtitle"));
     let list_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
         .min_content_height(90)
         .max_content_height(180)
         .vexpand(true)
         .child(&folders)
         .build();
-    content.append(&list_scroll);
+    drive_card.append(&list_scroll);
     let hint=label("Folder pada jalur di atas adalah pilihan sinkronisasi. Klik subfolder untuk masuk; My Drive berarti seluruh drive pribadi.","subtitle");
     hint.set_wrap(true);
-    content.append(&hint);
-    content.append(&label("2 · FOLDER LOKAL", "eyebrow"));
+    drive_card.append(&hint);
+    content.append(&drive_card);
+    let local_card = card();
+    local_card.append(&label("2 · FOLDER LOKAL", "eyebrow"));
     let local = label("Belum dipilih", "detail");
     local.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-    content.append(&local);
+    local_card.append(&local);
     let choose_button = gtk::Button::with_label("Pilih folder lokal kosong…");
     choose_button.set_halign(gtk::Align::Start);
-    content.append(&choose_button);
+    local_card.append(&choose_button);
+    content.append(&local_card);
     let feedback = label(
         "Profil baru tidak mengganti folder yang sedang tersinkron.",
         "subtitle",
@@ -392,6 +412,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                     }
                     if accounts.is_empty() {
                         profiles_box.append(&label("Belum ada akun tersimpan.", "subtitle"));
+                        ui.account.set_text("Hubungkan akun untuk memulai.");
                     }
                     for a in accounts {
                         let email = a
@@ -404,6 +425,12 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                             None => format!("{} · lanjutkan memilih folder", email),
                         };
                         let button = gtk::Button::with_label(&caption);
+                        button.set_tooltip_text(Some(&caption));
+                        if let Some(text) = button.child().and_downcast::<gtk::Label>() {
+                            text.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+                            text.set_max_width_chars(45);
+                            text.set_xalign(0.0);
+                        }
                         let weak = Rc::downgrade(&ui);
                         button.connect_clicked(move |_| {
                             if let Some(ui) = weak.upgrade() {
@@ -499,5 +526,6 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
         glib::ControlFlow::Continue
     });
     window.present();
+    heading.grab_focus();
     window
 }

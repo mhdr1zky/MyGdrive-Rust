@@ -273,15 +273,19 @@ def capture(args):
             env["DISPLAY"] = display
             preferences = subprocess.Popen(["/usr/lib/x86_64-linux-gnu/xfce4/xfconf/xfconfd"], env=env, stdout=log, stderr=log)
             binary_dir = (REPO / args.binary_dir).resolve()
-            for filename, option in [("dashboard.png", []), ("offline-browser.png", ["--offline"])]:
+            def render(filename, option, title):
                 application = subprocess.Popen([str(binary_dir / "mygdrive-desktop"), "--state", str(demo.state), *option,
                                                 "--snapshot", str(OUT / filename)], env=env, stdout=log, stderr=log)
-                if option:
-                    for _ in range(30):
-                        window = find_window(lib, isolated, "Tersedia offline")
+                if args.compact or option == ["--offline"]:
+                    for _ in range(40):
+                        window = find_window(lib, isolated, title)
                         if window:
-                            lib.XMoveResizeWindow(isolated, window, 0, 0, 820, 960)
-                            lib.XSync(isolated, 0)
+                            width, height = (480, 760) if args.compact else (820, 960)
+                            # Wait for GTK to map and apply its initial default size.
+                            for _ in range(3):
+                                time.sleep(.2)
+                                lib.XMoveResizeWindow(isolated, window, 0, 0, width, height)
+                                lib.XSync(isolated, 0)
                             break
                         time.sleep(.05)
                 application.wait(timeout=20)
@@ -289,11 +293,14 @@ def capture(args):
                     raise RuntimeError(f"Application exited with {application.returncode}")
                 if not (OUT / filename).exists():
                     raise RuntimeError(f"Missing application snapshot {filename}")
+
+            render("dashboard.png", [], "MyGdrive Rust")
+            render("offline-browser.png", ["--offline"], "Tersedia offline")
+            render("account-setup.png", ["--setup"], "Akun dan folder")
             demo.activity = True
             demo.operation("notes", "upload", "snapshot_ready", 9)
             demo.db.commit()
-            subprocess.run([str(binary_dir / "mygdrive-desktop"), "--state", str(demo.state), "--progress",
-                            "--snapshot", str(OUT / "sync-activity.png")], env=env, check=True, timeout=20, stdout=log, stderr=log)
+            render("sync-activity.png", ["--progress"], "Aktivitas sinkronisasi")
             demo.activity = False
             if args.gtk_only:
                 print("GTK snapshots captured:", OUT)
@@ -356,6 +363,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary-dir", default="target/debug")
     parser.add_argument("--display", type=int, default=79)
+    parser.add_argument("--compact", action="store_true", help="Verify GTK layouts at 480px window width")
     parser.add_argument("--gtk-only", action="store_true", help="Skip the native FUSE/Thunar capture")
     parser.add_argument("--output-dir", help="Use a separate output directory for package verification")
     parser.add_argument("--inside-session", action="store_true", help=argparse.SUPPRESS)

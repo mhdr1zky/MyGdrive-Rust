@@ -1,5 +1,16 @@
 # Catatan rilis
 
+## v1.0.4 — 25 Oktober 2026
+
+- Tampilan dashboard, aktivitas sinkronisasi, akun/folder, dan pilihan offline
+  dirapikan dengan gaya konsisten, teks yang membungkus, dan tombol yang menyesuaikan
+  lebar jendela. Aktivitas sinkronisasi dapat dibuka langsung dari dashboard.
+- Dashboard menampilkan versi aplikasi yang sedang berjalan, status rilis GitHub,
+  pemeriksaan manual, dan tautan catatan rilis.
+- Pemeriksaan berkala tidak lagi memasang pembaruan otomatis. Unduhan dan pemasangan
+  paket hanya dimulai setelah pengguna memilih **Update sekarang**. Build source
+  membuka halaman rilis untuk pemasangan manual.
+
 ## v1.0.3 — 25 Oktober 2026
 
 - Pembaruan desktop otomatis dari GitHub Releases untuk `.deb` amd64 dan

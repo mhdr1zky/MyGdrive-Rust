@@ -43,37 +43,56 @@ struct Args {
     progress: bool,
 }
 const CSS: &str = r#"
-window { background: #f4f6fb; color: #18243b; font-family: Sans; }
-.sidebar { background: #14223b; color: #c4d2e9; padding: 28px 20px; }
-.brand { font-size: 24px; font-weight: 800; color: white; }
-.brand-caption { font-size: 12px; color: #94aacb; }
-.nav-item { background: #28436d; color: white; border-radius: 10px; padding: 13px 16px; font-weight: 700; }
-.sidebar-note { color: #a8bbd8; font-size: 12px; }
-.sidebar checkbutton label { color: #dce7f7; }
-.content { padding: 20px; }
-.eyebrow { color: #657591; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
-.title { font-size: 27px; font-weight: 800; }
-.subtitle { color: #65718a; font-size: 13px; }
-.card { background: white; border: 1px solid #e1e6ef; border-radius: 15px; padding: 16px; }
-.status-title { font-size: 22px; font-weight: 750; }
-.value { font-size: 24px; font-weight: 750; }
-.detail { font-size: 13px; }
-.pill { background: #e6f6ef; color: #157a51; border-radius: 18px; padding: 7px 13px; font-size: 12px; font-weight: 700; }
-.pill.warning { background: #fff0d9; color: #925b0d; }
-.notice { background: #fff6e6; color: #755724; border-radius: 10px; padding: 10px; font-size: 12px; }
-.activity { font-size: 12px; color: #53617b; }
-button { border-radius: 9px; padding: 8px 12px; font-weight: 600; box-shadow: none; }
-button.suggested-action { background: #346be8; color: white; border: 1px solid #346be8; }
+window { background: #f5f7fb; color: #19263c; font-family: Sans; }
+.topbar { background: #ffffff; border-bottom: 1px solid #e2e8f0; padding: 16px 24px; }
+.brand { font-size: 21px; font-weight: 800; color: #245bc4; }
+.brand-caption { font-size: 12px; color: #68778f; }
+.nav-item { background: #eaf0ff; color: #245bc4; border-radius: 10px; padding: 9px 14px; font-weight: 700; }
+.content { padding: 24px; }
+.eyebrow { color: #66768f; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+.title { font-size: 28px; font-weight: 800; }
+.subtitle { color: #617089; font-size: 13px; }
+.card { background: #ffffff; border: 1px solid #e1e7f0; border-radius: 16px; padding: 18px; }
+.hero { background: #eef4ff; border-color: #d7e4ff; }
+.status-title { font-size: 21px; font-weight: 700; }
+.value { font-size: 30px; font-weight: 800; color: #245bc4; }
+.detail { font-size: 14px; }
+.pill { background: #e2f5eb; color: #146443; border-radius: 20px; padding: 6px 12px; font-size: 12px; font-weight: 700; }
+.pill.warning { background: #fff0d7; color: #86500a; }
+.notice { background: #edf2fa; color: #50627d; border-radius: 12px; padding: 12px; font-size: 12px; }
+.activity { font-size: 13px; color: #50627d; }
+button { background: #ffffff; color: #30415d; border: 1px solid #d9e1ed; border-radius: 10px; padding: 9px 13px; font-weight: 600; box-shadow: none; }
+button:hover { background: #edf3ff; border-color: #aac2f0; }
+button:focus-visible { outline: 2px solid #346be8; outline-offset: 2px; }
+button.suggested-action { background: #3067da; color: white; border: 1px solid #3067da; }
+button.suggested-action:hover { background: #2456bf; }
 button:disabled { opacity: 0.48; }
+flowboxchild { padding: 0; }
+list.boxed-list { background: white; border: 1px solid #e1e7f0; border-radius: 12px; padding: 6px; }
+progressbar trough { background: #e1e9f6; border-radius: 8px; min-height: 6px; }
+progressbar progress { background: #3067da; border-radius: 8px; min-height: 6px; }
 "#;
 fn label(text: &str, class: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);
+    label.set_wrap(true);
+    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    label.set_max_width_chars(65);
     label.add_css_class(class);
     label
 }
 fn row() -> gtk::Box {
     gtk::Box::new(gtk::Orientation::Horizontal, 12)
+}
+/// GTK FlowBox wraps actions and cards naturally at the available window width.
+fn flow() -> gtk::FlowBox {
+    gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .column_spacing(8)
+        .row_spacing(8)
+        .min_children_per_line(1)
+        .max_children_per_line(4)
+        .build()
 }
 fn column(spacing: i32) -> gtk::Box {
     gtk::Box::new(gtk::Orientation::Vertical, spacing)
@@ -114,21 +133,36 @@ impl Widgets {
         let status = snapshot.status.as_ref();
         let active = snapshot.live && status.is_some_and(|s| !s.shutdown_requested);
         let paused = status.is_some_and(|s| s.paused);
-        self.pill.set_text(if snapshot.live {
-            if paused {
-                "Dijeda"
-            } else {
-                "Service aktif"
-            }
+        let notice = snapshot.notice();
+        self.pill.set_text(if !snapshot.live {
+            "Layanan nonaktif"
+        } else if paused {
+            "Dijeda"
+        } else if notice.is_some() {
+            "Perlu perhatian"
         } else {
-            "Tidak terhubung"
+            "Terhubung"
         });
-        if !snapshot.live || paused {
+        if !snapshot.live || paused || notice.is_some() {
             self.pill.add_css_class("warning");
         } else {
             self.pill.remove_css_class("warning");
         }
-        self.description.set_text(if snapshot.live {if paused{"Perubahan lokal tetap dicatat. Siklus yang aktif diselesaikan sebelum jeda."}else{"Folder Anda dipantau. Sinkronisasi mengikuti jadwal service."}}else if status.is_some(){"Menampilkan catatan terakhir. Mulai service untuk memperbarui status."}else if snapshot.configuration().is_some(){"Konfigurasi tersedia. Mulai service untuk memantau sinkronisasi."}else{"Belum ada konfigurasi sinkronisasi. Buka Akun dan folder untuk menghubungkan Google Drive."});
+        self.description.set_text(if snapshot.live {
+            if let Some(notice) = notice {
+                notice.description()
+            } else if paused {
+                "Perubahan lokal tetap disimpan. Lanjutkan saat Anda siap."
+            } else {
+                "Folder Anda dipantau. Perubahan disinkronkan secara berkala."
+            }
+        } else if status.is_some() {
+            "Menampilkan catatan terakhir. Mulai layanan untuk memperbarui status."
+        } else if snapshot.configuration().is_some() {
+            "Folder sudah dikonfigurasi. Mulai layanan untuk menyinkronkan file."
+        } else {
+            "Hubungkan Google Drive melalui Akun dan folder untuk memulai."
+        });
         self.pause
             .set_label(if paused { "Lanjutkan" } else { "Jeda" });
         self.pause.set_sensitive(active && !busy);
@@ -136,6 +170,15 @@ impl Widgets {
         self.stop.set_sensitive(active && !busy);
         self.start
             .set_sensitive(!snapshot.live && snapshot.configuration().is_some() && !busy);
+        self.start.set_visible(!snapshot.live);
+        self.stop.set_visible(snapshot.live);
+        self.pause.set_visible(snapshot.live);
+        self.sync.set_visible(snapshot.live);
+        for button in [&self.start, &self.stop, &self.pause, &self.sync] {
+            if let Some(child) = button.parent() {
+                child.set_visible(button.is_visible());
+            }
+        }
         self.open.set_sensitive(snapshot.configuration().is_some());
         self.drive.set_sensitive(snapshot.configuration().is_some());
         if let Some(s) = status {
@@ -267,74 +310,49 @@ fn build(
         .default_width(1080)
         .default_height(790)
         .build();
-    let shell = row();
-    shell.set_spacing(0);
-    let sidebar = column(12);
-    sidebar.add_css_class("sidebar");
-    sidebar.set_width_request(180);
-    sidebar.append(&label("☁  MyGdrive Rust", "brand"));
-    sidebar.append(&label("YOUR CLOUD, YOUR DESKTOP", "brand-caption"));
-    let space = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    space.set_height_request(30);
-    sidebar.append(&space);
-    sidebar.append(&label("Sinkronisasi", "nav-item"));
-    let settings = gtk::Button::with_label("Akun dan folder");
-    sidebar.append(&settings);
-    let offline_button = gtk::Button::with_label("Tersedia offline");
-    sidebar.append(&offline_button);
+    let shell = column(0);
+    let navigation = column(12);
+    navigation.add_css_class("topbar");
+    let brand = flow();
+    brand.set_halign(gtk::Align::Fill);
+    brand.set_max_children_per_line(3);
+    brand.insert(&label("☁  MyGdrive Rust", "brand"), -1);
     let autostart = gtk::CheckButton::with_label("Mulai saat login");
     autostart.set_sensitive(false);
-    sidebar.append(&autostart);
-    if !snapshot_mode {
-        if let Some(path) = updater::status_path() {
-            let update_status = label("Pembaruan otomatis aktif", "sidebar-note");
-            update_status.set_wrap(true);
-            update_status.set_max_width_chars(24);
-            if std::env::var_os("MYGDRIVE_DISABLE_AUTO_UPDATE").is_some() {
-                update_status.set_text("Pembaruan otomatis dinonaktifkan");
-            } else {
-                let weak = update_status.downgrade();
-                glib::timeout_add_local(Duration::from_secs(5), move || {
-                    let Some(label) = weak.upgrade() else {
-                        return glib::ControlFlow::Break;
-                    };
-                    if let Ok(text) = std::fs::read_to_string(&path) {
-                        if let Ok(status) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if let Some(message) = status["message"].as_str() {
-                                label.set_text(message);
-                            }
-                        }
-                    }
-                    glib::ControlFlow::Continue
-                });
-            }
-            sidebar.append(&update_status);
-        }
-    }
+    brand.insert(&autostart, -1);
     let exit = gtk::Button::with_label("Keluar");
     exit.set_tooltip_text(Some(
-        "Hentikan sinkronisasi profil ini dengan tertib, kemudian keluar.",
+        "Selesaikan sinkronisasi aktif, hentikan layanan, lalu keluar.",
     ));
-    sidebar.append(&exit);
-    let fill = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    fill.set_vexpand(true);
-    sidebar.append(&fill);
-    let note = label("Google Drive\nDashboard awal · Linux", "sidebar-note");
-    note.set_wrap(true);
-    sidebar.append(&note);
-    shell.append(&sidebar);
+    brand.insert(&exit, -1);
+    navigation.append(&brand);
+    let nav = flow();
+    nav.set_halign(gtk::Align::Fill);
+    nav.insert(&label("Dashboard", "nav-item"), -1);
+    let activity_button = gtk::Button::with_label("Aktivitas sinkronisasi");
+    nav.insert(&activity_button, -1);
+    let settings = gtk::Button::with_label("Akun dan folder");
+    nav.insert(&settings, -1);
+    let offline_button = gtk::Button::with_label("Tersedia offline");
+    nav.insert(&offline_button, -1);
+    navigation.append(&nav);
+    shell.append(&navigation);
     let content = column(12);
     content.add_css_class("content");
     content.set_hexpand(true);
     let heading = column(5);
-    heading.append(&label("RUANG KERJA ANDA", "eyebrow"));
-    heading.append(&label("Sinkronisasi Anda", "title"));
     heading.append(&label(
-        "Default hanya online. Pilih file atau folder lewat Tersedia offline.",
+        &format!("RUANG KERJA ANDA  ·  v{}", env!("CARGO_PKG_VERSION")),
+        "eyebrow",
+    ));
+    heading.append(&label("Dashboard", "title"));
+    heading.append(&label(
+        "Pantau file, kelola sinkronisasi, dan periksa pembaruan aplikasi di sini.",
         "subtitle",
     ));
     content.append(&heading);
     let status_card = card();
+    status_card.add_css_class("hero");
     let status_header = row();
     let title = label("Menghubungkan ke service…", "status-title");
     title.set_hexpand(true);
@@ -348,7 +366,7 @@ fn build(
     let stage = label("Menunggu status", "detail");
     stage.set_wrap(true);
     status_card.append(&stage);
-    let buttons = row();
+    let buttons = flow();
     let pause = gtk::Button::with_label("Jeda");
     let sync = gtk::Button::with_label("Sinkronkan sekarang");
     sync.add_css_class("suggested-action");
@@ -356,10 +374,11 @@ fn build(
     let stop = gtk::Button::with_label("Hentikan service");
     for b in [&pause, &sync, &start, &stop] {
         b.set_sensitive(false);
-        buttons.append(b);
+        buttons.insert(b, -1);
     }
     status_card.append(&buttons);
     content.append(&status_card);
+    content.append(&updater::panel(snapshot_mode));
     let folder_card = card();
     folder_card.append(&label("FOLDER TERHUBUNG", "eyebrow"));
     let profile = label("Google Drive", "detail");
@@ -371,27 +390,30 @@ fn build(
     let remote = label("", "subtitle");
     remote.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     folder_card.append(&remote);
-    let links = row();
+    let links = flow();
     let open = gtk::Button::with_label("Buka folder lokal");
     let drive = gtk::Button::with_label("Buka di Drive");
-    links.append(&open);
-    links.append(&drive);
+    links.insert(&open, -1);
+    links.insert(&drive, -1);
     folder_card.append(&links);
     content.append(&folder_card);
-    let metrics = row();
+    let metrics = flow();
+    metrics.set_halign(gtk::Align::Fill);
+    metrics.set_homogeneous(true);
+    metrics.set_max_children_per_line(3);
     let pending = label("—", "value");
     let operations = label("—", "value");
     let success = label("Belum ada", "detail");
     for (caption, value) in [
-        ("FILE PERLU PERHATIAN", &pending),
+        ("FILE MENUNGGU", &pending),
         ("OPERASI TERTUNDA", &operations),
-        ("SINKRONISASI BERHASIL", &success),
+        ("TERAKHIR BERHASIL", &success),
     ] {
         let metric = card();
         metric.set_hexpand(true);
         metric.append(&label(caption, "eyebrow"));
         metric.append(value);
-        metrics.append(&metric);
+        metrics.insert(&metric, -1);
     }
     content.append(&metrics);
     let activity_card = card();
@@ -406,7 +428,7 @@ fn build(
     let expander = gtk::Expander::new(Some("Aktivitas sesi ini"));
     expander.set_child(Some(&activity_card));
     content.append(&expander);
-    let notice=label("Jika koneksi terputus, perubahan lokal dan antrean operasi dipertahankan. Sinkronisasi dicoba ulang otomatis. Perubahan berbeda pada kedua sisi disimpan sebagai salinan konflik.","notice");
+    let notice=label("File diunduh saat dibuka. Gunakan Tersedia offline agar file bisa dibuka tanpa internet. Perubahan lokal tetap disimpan saat koneksi terputus.","notice");
     notice.set_wrap(true);
     content.append(&notice);
     let feedback = label(
@@ -477,6 +499,8 @@ fn build(
     app.add_action(&accounts_action);
     let progress = Rc::new(progress::Popup::new(&window, snapshot_mode));
     let progress_action = gio::SimpleAction::new_stateful("progress", None, &false.to_variant());
+    let popup_button = progress.clone();
+    activity_button.connect_clicked(move |_| popup_button.window.present());
     let popup = progress.clone();
     progress_action.connect_activate(move |_, _| popup.window.present());
     let action_state = progress_action.clone();
@@ -839,9 +863,6 @@ fn build(
 }
 fn main() -> glib::ExitCode {
     let args = Args::parse();
-    if args.snapshot.is_none() {
-        updater::start();
-    }
     let state = args.state.unwrap_or_else(|| {
         directories::BaseDirs::new()
             .expect("user data directory")
