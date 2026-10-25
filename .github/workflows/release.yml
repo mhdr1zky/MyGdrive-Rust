@@ -3,7 +3,7 @@ name: Release Linux packages
 on:
   push:
     branches: [main]
-    paths: ['.github/release-version']
+    paths: ['.github/release-version', '.github/workflows/release.yml']
     tags: ['v*.*.*']
   workflow_dispatch:
 
@@ -47,7 +47,7 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y build-essential pkg-config libgtk-4-dev dpkg-dev flatpak python3
+          sudo apt-get install --no-install-recommends -y build-essential pkg-config libgtk-4-dev dpkg-dev squashfs-tools libgdk-pixbuf2.0-bin curl python3
       - name: Install Rust stable
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
@@ -62,18 +62,14 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_*.py'
       - name: Build Debian package
         run: scripts/build-deb.sh
-      - name: Install Flatpak runtime
-        run: |
-          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user --noninteractive -y flathub org.gnome.Platform//50
-      - name: Build Flatpak bundle
-        run: scripts/build-flatpak.sh --skip-build
+      - name: Build AppImage
+        run: scripts/build-appimage.sh --skip-build
       - name: Inspect packages and create checksums
         run: |
           dpkg-deb --info dist/*.deb
           dpkg-deb --contents dist/*.deb
           cd dist
-          sha256sum mygdrive-rust_*.deb mygdrive-rust_*.flatpak > SHA256SUMS
+          sha256sum mygdrive-rust_*.deb mygdrive-rust_*.AppImage > SHA256SUMS
       - name: Publish complete release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -90,7 +86,7 @@ jobs:
             gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft \
               --title "MyGdrive Rust $RELEASE_TAG" --notes-file release-notes.md
           fi
-          for asset in dist/mygdrive-rust_*.deb dist/mygdrive-rust_*.flatpak dist/SHA256SUMS; do
+          for asset in dist/mygdrive-rust_*.deb dist/mygdrive-rust_*.AppImage dist/SHA256SUMS; do
             name=$(basename "$asset")
             if ! gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fxq "$name"; then
               gh release upload "$RELEASE_TAG" "$asset"

@@ -2,7 +2,7 @@
 
 Sinkronisasi Google Drive untuk Linux, ditulis dengan Rust. Akses My Drive dari desktop dan pengelola berkas, unduh konten saat dibutuhkan, lalu pilih file atau folder yang ingin tetap tersedia tanpa internet.
 
-**Rilis terbaru: [v1.0.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.1)** — paket `.deb` amd64 untuk Ubuntu 24.04/Linux Mint 22 dan bundle Flatpak x86_64. Proyek ini independen dan tidak berafiliasi dengan Google.
+**Rilis terbaru: [v1.0.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.1)** — paket `.deb` amd64 untuk Ubuntu 24.04/Linux Mint 22 dan AppImage x86_64. Proyek ini independen dan tidak berafiliasi dengan Google.
 
 Versi ini memperbaiki antrean file baru yang sudah dihapus sebelum unggah, pilihan offline mandiri/rekursif, pelepasan ruang disk setelah unpin, serta waktu pemeriksaan sinkronisasi. Lihat [catatan rilis](CHANGELOG.md).
 
@@ -32,31 +32,31 @@ Tangkapan layar aplikasi di Linux, menggunakan profil dan berkas contoh. Tampila
 
 ## Pilih paket
 
-| Fitur | `.deb` | Flatpak |
+| Fitur | `.deb` | AppImage |
 | --- | --- | --- |
 | Dashboard, tray, login OAuth, sinkronisasi folder lokal | Ya | Ya |
 | Pilih file/subfolder tersedia offline dan unpin | Ya | Ya |
-| Drive virtual FUSE, unduh saat dibuka melalui Thunar | Ya | Belum tersedia |
-| Menu konteks dan badge Thunar | Opsional | Belum tersedia |
-| Mulai saat login dari pengaturan aplikasi | Opsional | Belum tersedia |
+| Helper drive virtual FUSE | Ya | Ya, melalui `--mount` |
+| Integrasi menu dan badge Thunar | Setup native | Setup manual; gunakan `.deb` untuk integrasi lengkap |
+| Mulai saat login | Opsional | Opsional; lokasi AppImage harus tetap |
 
-Flatpak berfokus pada folder lokal dan pilihan offline di dashboard. Paket `.deb` menyediakan integrasi pengelola berkas native yang ditampilkan pada screenshot Thunar.
+## Menjalankan AppImage
 
-## Instalasi Flatpak
-
-Unduh `mygdrive-rust_1.0.1_x86_64.flatpak` dari [rilis v1.0.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.1), lalu jalankan:
+Unduh `mygdrive-rust_1.0.1_x86_64.AppImage` dari [rilis v1.0.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.1), lalu jalankan:
 
 ```bash
-flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./mygdrive-rust_1.0.1_x86_64.flatpak
-flatpak run io.github.mhdr1zky.MyGdrive
+chmod +x mygdrive-rust_1.0.1_x86_64.AppImage
+./mygdrive-rust_1.0.1_x86_64.AppImage
+# CLI dan helper drive virtual:
+./mygdrive-rust_1.0.1_x86_64.AppImage --sync --help
+./mygdrive-rust_1.0.1_x86_64.AppImage --mount --help
 ```
 
-Bundle memerlukan runtime **GNOME 50** dari Flathub; runtime tidak disertakan dalam file `.flatpak`. Rilis ini didistribusikan melalui GitHub, bukan listing aplikasi di Flathub. Untuk memperbarui, instal bundle versi yang lebih baru dengan perintah yang sama. Lihat [dokumentasi bundle Flatpak](https://docs.flatpak.org/en/latest/single-file-bundles.html).
+AppImage x86_64 ditargetkan untuk **Ubuntu 24.04/Linux Mint 22 atau sistem dengan glibc 2.39+**. Pustaka GTK disertakan; driver grafis, font, browser, dan layanan desktop memakai sistem host. Ini bukan sandbox. Data/token memakai lokasi native yang sama (`~/.local/share/mygdrive/`); jangan jalankan `.deb` dan AppImage bersamaan pada profil yang sama.
 
-Flatpak mendapat akses jaringan dan folder home untuk menyinkronkan folder pilihan. Data dan tokennya terpisah di `~/.var/app/io.github.mhdr1zky.MyGdrive/data/mygdrive/`. Jangan menjalankan paket native dan Flatpak pada folder lokal yang sama secara bersamaan. CLI dapat dibuka dengan `flatpak run --command=mygdrive-sync io.github.mhdr1zky.MyGdrive --help`.
+Runtime AppImage memakai FUSE; jika mount AppImage tidak didukung, jalankan `./mygdrive-rust_1.0.1_x86_64.AppImage --appimage-extract-and-run`. Drive virtual aplikasi tetap membutuhkan dukungan FUSE host dan izin `/dev/fuse` tersendiri. AppImage tidak memasang menu konteks/badge Thunar secara otomatis dan tidak memulai mount online secara otomatis. Untuk mount manual, gunakan `--mount --state /path/profil --mount /path/mount`; siapkan direktori mount kosong. Gunakan `.deb` untuk launcher mount dan integrasi Thunar terkelola.
 
-Pembersihan setelah unpin memakai pemeriksaan kernel untuk melindungi file yang dibuka editor di luar sandbox. Jika filesystem tidak mendukung pemeriksaan tersebut, Flatpak mempertahankan salinan lokal sampai pelepasan dapat dinyatakan aman.
+Simpan AppImage pada lokasi tetap sebelum mengaktifkan **Mulai saat login**. Untuk memperbarui, tutup aplikasi dan layanan profil, lalu ganti file dengan AppImage versi baru pada lokasi yang sama. Lihat [panduan penggunaan AppImage](https://docs.appimage.org/user-guide/run-appimages.html).
 
 ## Instalasi `.deb`
 
@@ -217,16 +217,15 @@ sudo apt install build-essential pkg-config libgtk-4-dev dpkg-dev python3
 sudo apt install ./dist/mygdrive-rust_1.0.1_amd64.deb
 ```
 
-Bundle Flatpak memakai binary release dari source dan `Cargo.lock` yang sama:
+AppImage memakai binary release dan `Cargo.lock` yang sama:
 
 ```bash
-flatpak install --user flathub org.gnome.Platform//50
-./scripts/build-flatpak.sh
+./scripts/build-appimage.sh
 # Jika build release sudah selesai:
-./scripts/build-flatpak.sh --skip-build
+./scripts/build-appimage.sh --skip-build
 ```
 
-Script memeriksa versi binary, menguji pemuatan executable di runtime GNOME 50, lalu mengekspor bundle. Tidak diperlukan `flatpak-builder` atau SDK Rust tambahan karena Cargo mengompilasi sebelum pengemasan. Flatpak tidak membundel helper FUSE dan tidak mendapat izin menjalankan perintah pada host.
+Script mematok versi dan SHA-256 appimagetool/runtime resmi, membundel dependensi GTK beserta catatan lisensinya, memeriksa ketiga executable, lalu menghasilkan satu file AppImage. Dependensi build tambahan: `curl`, `mksquashfs` (paket `squashfs-tools`), `glib-compile-schemas`, serta tool GdkPixbuf. Build dilakukan pada Ubuntu 24.04; glibc dan driver grafis tidak dibundel.
 
 Build CLI saja tidak membutuhkan GTK:
 
@@ -244,7 +243,7 @@ cargo clippy --locked --all-features --all-targets -- -D warnings
 cargo test --locked --all-features --all-targets
 ```
 
-Tes otomatis memakai adapter tiruan dan server lokal. Tes live onboarding tetap opt-in. Untuk rilis, samakan versi di `Cargo.toml`, `Cargo.lock`, catatan rilis, dan `.github/release-version`, lalu push ke `main`; workflow menguji, membangun `.deb` dan Flatpak, mengunggah checksum, kemudian memublikasikan rilis beserta tag pada commit tersebut. Push tag versi juga didukung. Detail perubahan tersedia pada [catatan rilis](CHANGELOG.md).
+Tes otomatis memakai adapter tiruan dan server lokal. Tes live onboarding tetap opt-in. Untuk rilis, samakan versi di `Cargo.toml`, `Cargo.lock`, catatan rilis, dan `.github/release-version`, lalu push ke `main`; workflow menguji, membangun `.deb` dan AppImage, mengunggah checksum, kemudian memublikasikan rilis beserta tag pada commit tersebut. Push tag versi juga didukung. Detail perubahan tersedia pada [catatan rilis](CHANGELOG.md).
 
 ## Lisensi
 

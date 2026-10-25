@@ -177,6 +177,12 @@ pub fn for_profile(state: &Path, binary: &Path) -> Result<Autostart> {
 }
 /// Find the dashboard launcher for a source build or an installed binary.
 pub fn desktop_launcher(binary: &Path) -> Result<PathBuf> {
+    // Persist the portable image path, never its temporary mount directory.
+    if let Some(image) = std::env::var_os("APPIMAGE").map(PathBuf::from) {
+        if image.is_absolute() && image.is_file() {
+            return Ok(image);
+        }
+    }
     let parent = binary
         .parent()
         .ok_or_else(|| Error::Invalid("binary directory unavailable".into()))?;
