@@ -61,14 +61,14 @@ impl FileIssue {
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Permission => "Izin file ditolak. Periksa akses akun ke file di Google Drive; aplikasi akan mencoba lagi.",
-            Self::Quota => "Penyimpanan Google Drive penuh. Kosongkan ruang atau tambah kuota; aplikasi akan mencoba lagi.",
-            Self::Authentication => "Login Google perlu diperbarui. Buka Akun dan folder → Login ulang akun terpilih.",
-            Self::Connection => "Koneksi Drive terputus. Periksa jaringan; aplikasi akan mencoba lagi otomatis.",
-            Self::RateLimit => "Drive membatasi permintaan. Tunggu percobaan ulang otomatis.",
-            Self::LocalStorage => "File lokal belum dapat dibaca atau ditulis. Periksa ruang disk dan izin folder; aplikasi akan mencoba lagi.",
-            Self::Unsupported => "Operasi file belum didukung. Periksa jenis file dan batas dukungan aplikasi.",
-            Self::Other => "Operasi gagal. Periksa status file dan diagnostik layanan; aplikasi akan mencoba lagi.",
+            Self::Permission => crate::i18n::tr("Izin file ditolak. Periksa akses akun ke file di Google Drive; aplikasi akan mencoba lagi."),
+            Self::Quota => crate::i18n::tr("Penyimpanan Google Drive penuh. Kosongkan ruang atau tambah kuota; aplikasi akan mencoba lagi."),
+            Self::Authentication => crate::i18n::tr("Login Google perlu diperbarui. Buka Akun dan folder → Login ulang akun terpilih."),
+            Self::Connection => crate::i18n::tr("Koneksi Drive terputus. Periksa jaringan; aplikasi akan mencoba lagi otomatis."),
+            Self::RateLimit => crate::i18n::tr("Drive membatasi permintaan. Tunggu percobaan ulang otomatis."),
+            Self::LocalStorage => crate::i18n::tr("File lokal belum dapat dibaca atau ditulis. Periksa ruang disk dan izin folder; aplikasi akan mencoba lagi."),
+            Self::Unsupported => crate::i18n::tr("Operasi file belum didukung. Periksa jenis file dan batas dukungan aplikasi."),
+            Self::Other => crate::i18n::tr("Operasi gagal. Periksa status file dan diagnostik layanan; aplikasi akan mencoba lagi."),
         }
     }
 }

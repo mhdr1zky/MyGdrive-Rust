@@ -1,112 +1,56 @@
-# Catatan rilis
+# Changelog
 
-## v1.0.4 — 25 Oktober 2026
+## v1.0.5 — 25 October 2026
 
-- Tampilan dashboard, aktivitas sinkronisasi, akun/folder, dan pilihan offline
-  dirapikan dengan gaya konsisten, teks yang membungkus, dan tombol yang menyesuaikan
-  lebar jendela. Aktivitas sinkronisasi dapat dibuka langsung dari dashboard.
-- Dashboard menampilkan versi aplikasi yang sedang berjalan, status rilis GitHub,
-  pemeriksaan manual, dan tautan catatan rilis.
-- Pemeriksaan berkala tidak lagi memasang pembaruan otomatis. Unduhan dan pemasangan
-  paket hanya dimulai setelah pengguna memilih **Update sekarang**. Build source
-  membuka halaman rilis untuk pemasangan manual.
+- Add file-based interface localization with English, Indonesian, and Simplified Chinese catalogs. The default follows the system locale, with English fallback. Support `--language`, `MYGDRIVE_LANGUAGE`, and external JSON overrides without recompilation.
+- Localize the dashboard, account setup, offline browser, activity history, tray menus, desktop notifications, and updater status.
+- Include editable translation catalogs in Debian and AppImage packages.
+- Maintain the README and repository Markdown documentation in English.
 
-## v1.0.3 — 25 Oktober 2026
+## v1.0.4 — 25 October 2026
 
-- Pembaruan desktop otomatis dari GitHub Releases untuk `.deb` amd64 dan
-  AppImage x86_64: pemeriksaan enam jam, unduhan terverifikasi SHA-256,
-  penggantian AppImage atomik, dan pemasangan `.deb` melalui autentikasi
-  administrator Linux. Status tampil di sidebar; versi baru dipakai setelah
-  membuka ulang aplikasi/service. Build source dan mode snapshot dikecualikan.
+- Refresh dashboard, activity, account/folder, and offline windows with consistent styling, wrapped text, and responsive buttons. Open sync activity directly from the dashboard.
+- Display the running version, GitHub release status, manual checks, and release-note links.
+- Periodic checks no longer install updates automatically. Package downloading and installation require **Update now**. Source builds open the release page for manual installation.
 
-## v1.0.2 — 25 Oktober 2026
+## v1.0.3 — 25 October 2026
 
-- Kegagalan izin saat membaca metadata satu file tidak lagi menghentikan
-  pemrosesan file lain. Penyebabnya tersimpan per file dan dicoba kembali;
-  kegagalan akun, koneksi, dan pembatasan permintaan tetap menghentikan siklus.
-- Pembangunan ulang inventaris menandai item lama yang tidak ditemukan sebagai
-  tidak tersedia setelah seluruh daftar selesai. Daftar parsial dan restart
-  tidak menghilangkan namespace lama atau perubahan lokal yang belum diunggah.
-- Salinan outbox unggahan normal yang sudah selesai dibersihkan secara otomatis.
-  Antrean aktif, operasi dibatalkan, konflik, berkas perlu tinjauan, serta blob
-  tanpa jurnal tetap dilindungi. Riwayat operasi selesai tetap tersedia.
-- Aktivitas sinkronisasi menampilkan penyebab kegagalan dan tindakan pemulihan
-  untuk izin file, kuota, login, koneksi, batas layanan, dan penyimpanan lokal.
+- Introduce desktop GitHub Releases updates for amd64 `.deb` and x86_64 AppImage: six-hour checks, SHA-256 verification, atomic AppImage replacement, and `.deb` installation through Linux administrator authentication. Status appears in the desktop interface; reopen the application/service to use the new version. Source builds and snapshot mode are excluded from automatic installation.
 
-- Skrip publikasi GitHub satu perintah dengan pratinjau, penyaringan berkas
-  privat/hasil build, checkout terpisah, dan perlindungan konflik. Tes skrip
-  serta launcher dijalankan otomatis melalui GitHub Actions.
+## v1.0.2 — 25 October 2026
 
-## v1.0.1 — 25 Oktober 2026
+- A single file's metadata permission failure no longer stops other files. Store the reason per file and retry; account, connection, and throttling failures still stop the cycle.
+- Mark missing old inventory entries unavailable only after a complete rebuild. Partial listings and restarts preserve the previous namespace and unuploaded local changes.
+- Clean completed normal-upload outbox copies automatically. Active/cancelled operations, conflicts, review-required files, and unjournaled blobs remain protected. Completed history remains available.
+- Show failure causes and recovery actions for file permissions, quota, sign-in, connectivity, throttling, and local storage.
+- Add a one-command GitHub publishing script with preview, private/build-file filtering, isolated checkout, and conflict protection. Script and launcher tests run in GitHub Actions.
 
-- Paket AppImage x86_64 untuk dashboard, sinkronisasi folder lokal, pilihan
-  offline, dan CLI/helper mount FUSE. GTK dibundel; integrasi Thunar tetap
-  memerlukan setup native. Autostart menyimpan lokasi AppImage yang tetap.
-- Pin file/subfolder mandiri, turunan folder termasuk anak baru dan direktori
-  kosong, serta informasi eksplisit ketika layanan sedang dijeda.
-- Lock Office/LibreOffice dan scratch Word yang dikenali tidak masuk antrean
-  baru; penyimpanan atomik melalui file sementara lalu rename tetap didukung.
+## v1.0.1 — 25 October 2026
 
-- File lokal yang dihapus sebelum unggahan pertama kini selesai secara lokal,
-  termasuk lock editor lama yang sudah hilang. Antrean tidak lagi menunggu
-  penghapusan cloud untuk file tanpa identitas cloud. Jurnal aktif dan file
-  pemulihan tetap dilindungi; respons create yang hilang dipulihkan sebelum
-  penghapusan cloud dijalankan.
-- Pemeriksaan metadata rutin file bersih memakai maksimal empat GET bersamaan;
-  hasil siap diproses lebih dahulu, sementara perubahan dan transfer isi
-  background tetap berurutan. Edit lokal tetap didahulukan dan snapshot yang
-  berubah dibaca ulang. Fixture 24 file dengan latensi metadata buatan 40 ms
-  mencatat 1.150 → 360 ms dengan jumlah GET yang sama, tanpa unduhan ulang;
-  hasil ini bukan benchmark koneksi Google Drive nyata.
-- Polling bawaan profil baru menjadi 10 detik, dengan jadwal sukses dihitung
-  dari awal siklus dan jeda minimal 500 ms setelah siklus panjang. Interval
-  tersimpan dipertahankan; kegagalan tetap memakai backoff penuh.
-- Scan file identik melewati transaksi per-file; pencocokan direktori memakai
-  indeks inode/path dan ledger direktori kosong melewati pembacaan inventaris
-  remote. Launcher source memilih set lengkap executable yang lebih baru dari
-  release/debug, tanpa mencampur profil desktop/service/mount.
-- Daftar tersedia offline memakai koneksi SQLite read-only persisten khusus
-  yang terpisah dari writer dan pembaca kontrol/status, dengan snapshot
-  transaksi WAL tetap konsisten selama sinkronisasi.
-- Panel aktivitas sinkronisasi kini terbuka melalui **Lihat detail** pada
-  notifikasi atau tindakan manual dari tray/menu, tanpa muncul otomatis saat
-  operasi baru terdeteksi.
-- Melepas pilihan offline kini mengantrekan pembersihan otomatis pada
-  sinkronisasi berikutnya yang berhasil saat service tidak dijeda dan online.
-  Salinan lokal file bersih yang sudah tersinkron serta cache terkait dibuang;
-  perubahan tertunda, file perlu tinjauan, file terbuka, dan pin yang masih
-  berlaku tetap dilindungi sampai aman. Metadata tetap terlihat melalui mount
-  online, dan membuka file kembali mengunduhnya lagi. File cloud tidak dihapus.
+- Package dashboard, folder sync, offline selections, CLI, and FUSE helper in an x86_64 AppImage. Bundle GTK; Thunar integration still needs native setup. Autostart stores the fixed AppImage path.
+- Support independent file/subfolder pins, future folder children and empty directories, and explicit paused-service guidance.
+- Exclude recognized Office/LibreOffice locks and Word scratch files from new queues while preserving atomic temporary-file saves.
+- Complete files deleted before their first upload locally, including vanished editor locks. Files without cloud identity no longer wait for cloud deletion. Protect active journals/recovery files and recover lost create responses before issuing cloud deletes.
+- Allow up to four routine clean-file metadata GETs concurrently. Process ready results first while background content transfers and mutations remain sequential. Prioritize local changes and reread changed snapshots. A 24-file mock with 40 ms latency measured 1,150 → 360 ms with unchanged GET counts and no repeated downloads; this is not a real Google Drive benchmark.
+- Default new profiles to 10-second polling. Schedule successful cycles from cycle start, with at least 500 ms after long cycles. Preserve saved intervals and full failure backoff.
+- Skip per-file transactions for identical scans, index directory matching by inode/path, and avoid full remote inventory reads for empty-directory ledgers. Source launchers choose the newer complete release/debug executable set without mixing desktop/service/mount builds.
+- Give offline listings a dedicated persistent read-only SQLite connection, separate from writer and control/status readers, with consistent WAL snapshots.
+- Open activity through notification **View details** or manual tray/menu actions instead of automatically showing it for new work.
+- Unpin queues safe local-copy and related-cache cleanup after a successful online, unpaused cycle. Protect pending changes, review-required files, open handles, and remaining pins. Keep cloud files and mount metadata; reopening downloads content again.
 
-## v1.0.0 — 24 Oktober 2026
+## v1.0.0 — 24 October 2026
 
-Rilis pertama **MyGdrive Rust** untuk Linux, dengan CLI, dashboard GTK4, tray,
-dan mount FUSE opsional. Paket `.deb` mencakup ketiga binary:
-`mygdrive-sync`, `mygdrive-desktop`, dan `mygdrive-mount`.
+First Linux release with CLI, GTK4 dashboard, tray, and optional FUSE mount. The `.deb` contains `mygdrive-sync`, `mygdrive-desktop`, and `mygdrive-mount`.
 
-### Fitur
+### Features
 
-- Sinkronisasi Google Drive dua arah dengan watcher lokal, polling remote,
-  SQLite WAL, antrean persisten, serta pemulihan operasi setelah restart.
-- Penyimpanan default hanya-online, unduhan saat dibuka melalui FUSE, dan
-  pilihan tersedia offline untuk file atau folder secara rekursif.
-- Konflik konten mempertahankan kedua versi. Pemulihan tulisan editor pada
-  inode lama membutuhkan peninjauan sebelum diunggah.
-- Unggah, rename, move, dan Trash memakai pemeriksaan versi server; perubahan
-  bersamaan ditahan untuk rekonsiliasi atau peninjauan.
-- Login OAuth melalui browser dengan PKCE, profil akun/folder terpisah,
-  serta kontrol pause/resume, sync now, dan shutdown melalui Unix socket.
-- Dashboard aktivitas, tray, autostart per profil, serta integrasi Thunar.
-- Cache konten dengan checksum dan pembersihan LRU yang melindungi file
-  offline, perubahan lokal, dan operasi aktif.
+- Two-way Drive sync, local watcher, cloud polling, SQLite WAL, persistent queues, and restart recovery.
+- Online-only storage by default, FUSE on-demand downloads, and recursive offline file/folder selections.
+- Preserve-both conflicts; recovery of writes through displaced editor inodes requires review before upload.
+- Server-version checks for upload, rename, move, and Trash; concurrent changes wait for reconciliation or review.
+- Browser OAuth with PKCE, separate account/folder profiles, and Unix socket pause/resume, sync-now, and drain/shutdown.
+- Activity dashboard, tray, per-profile autostart, Thunar integration, verified content cache, and protective LRU cleanup.
 
-### Batas versi ini
+### Release limits
 
-- Ditujukan untuk My Drive dan file biasa. Google Workspace native belum
-  mendukung sinkronisasi isi; Shared Drives belum didukung.
-- Satu pasangan akun/folder per state; supervisor banyak profil belum tersedia.
-- Salinan lokal belum dapat didehidrasi otomatis. Unduhan terputus diulang
-  dari awal, dan token OAuth belum dienkripsi menggunakan keyring OS.
-- Paket Linux dibangun pada Ubuntu 24.04 untuk arsitektur amd64 dan membutuhkan
-  runtime GTK4 serta FUSE3. Panduan instalasi, desktop, offline, dan mount
-  tersedia di README; penyiapan akun dijelaskan dalam OAUTH_SETUP.md.
+My Drive and ordinary files only; no native Google Workspace content sync or Shared Drives. One pair per state, without a multi-profile supervisor. At this release, local copies could not be dehydrated automatically. Interrupted downloads restart from the beginning, and OAuth tokens are not OS-keyring encrypted. Packages target Ubuntu 24.04 amd64 with GTK4/FUSE3. See README and OAUTH_SETUP.md.

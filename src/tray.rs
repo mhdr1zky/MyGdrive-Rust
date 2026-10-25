@@ -1,4 +1,5 @@
 //! StatusNotifierItem adapter. Callbacks send intents; GTK and IPC run elsewhere.
+use crate::i18n::{fmt, tr};
 use crate::{
     dashboard::{Command, Snapshot},
     Result,
@@ -50,7 +51,10 @@ impl Model {
     pub fn with_pending_files(mut self, pending_files: usize) -> Self {
         if pending_files > 0 && self.active && !self.paused && !self.attention && !self.warning {
             self.syncing = true;
-            self.title = format!("Menyinkronkan {pending_files} berkas");
+            self.title = fmt(
+                "Menyinkronkan {pending_files} berkas",
+                &[("pending_files", pending_files.to_string())],
+            );
         }
         self
     }
@@ -163,13 +167,13 @@ impl Tray for Item {
             }
             .into(),
             ksni::MenuItem::Separator,
-            self.item("Tampilkan MyGdrive Rust", true, Event::Show),
-            self.item("Buka folder lokal", m.configured, Event::OpenFolder),
+            self.item(tr("Tampilkan MyGdrive Rust"), true, Event::Show),
+            self.item(tr("Buka folder lokal"), m.configured, Event::OpenFolder),
             self.item(
                 if m.paused {
-                    "Lanjutkan sinkronisasi"
+                    tr("Lanjutkan sinkronisasi")
                 } else {
-                    "Jeda sinkronisasi"
+                    tr("Jeda sinkronisasi")
                 },
                 m.active && !m.busy,
                 Event::Control(if m.paused {
@@ -179,18 +183,18 @@ impl Tray for Item {
                 }),
             ),
             self.item(
-                "Sinkronkan sekarang",
+                tr("Sinkronkan sekarang"),
                 m.active && !m.paused && !m.busy,
                 Event::Control(Command::SyncNow),
             ),
             self.item(
-                "Mulai service",
+                tr("Mulai service"),
                 !m.active && m.configured && !m.busy,
                 Event::Control(Command::Start),
             ),
-            self.item("Aktivitas sinkronisasi", true, Event::Progress),
+            self.item(tr("Aktivitas sinkronisasi"), true, Event::Progress),
             ksni::MenuItem::Separator,
-            self.item("Keluar dan hentikan sinkronisasi", !m.busy, Event::Quit),
+            self.item(tr("Keluar dan hentikan sinkronisasi"), !m.busy, Event::Quit),
         ]
     }
     fn watcher_offline(&self, _reason: ksni::OfflineReason) -> bool {

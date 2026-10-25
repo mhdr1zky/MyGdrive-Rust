@@ -1,6 +1,7 @@
 use clap::Parser;
 use gtk::{gio, glib, prelude::*};
 use mygdrive_sync::dashboard::{self, Command, Event, Snapshot};
+use mygdrive_sync::i18n::{fmt, tr};
 use mygdrive_sync::tray;
 use std::{
     cell::{Cell, RefCell},
@@ -21,6 +22,9 @@ mod updater;
 #[derive(Parser)]
 #[command(about = "MyGdrive Rust desktop dashboard")]
 struct Args {
+    /// Interface language: auto (system), en, id, zh, or a custom catalog code.
+    #[arg(long, env = "MYGDRIVE_LANGUAGE", default_value = "auto")]
+    language: String,
     #[arg(long)]
     state: Option<PathBuf>,
     /// Render the application window to PNG and exit, for visual verification.
@@ -106,7 +110,7 @@ fn time_text(ms: Option<i64>) -> String {
     ms.and_then(|v| glib::DateTime::from_unix_local(v / 1000).ok())
         .and_then(|d| d.format("%d %b, %H:%M:%S").ok())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "Belum ada".into())
+        .unwrap_or_else(|| tr("Belum ada").into())
 }
 struct Widgets {
     title: gtk::Label,
@@ -135,13 +139,13 @@ impl Widgets {
         let paused = status.is_some_and(|s| s.paused);
         let notice = snapshot.notice();
         self.pill.set_text(if !snapshot.live {
-            "Layanan nonaktif"
+            tr("Layanan nonaktif")
         } else if paused {
-            "Dijeda"
+            tr("Dijeda")
         } else if notice.is_some() {
-            "Perlu perhatian"
+            tr("Perlu perhatian")
         } else {
-            "Terhubung"
+            tr("Terhubung")
         });
         if !snapshot.live || paused || notice.is_some() {
             self.pill.add_css_class("warning");
@@ -152,19 +156,19 @@ impl Widgets {
             if let Some(notice) = notice {
                 notice.description()
             } else if paused {
-                "Perubahan lokal tetap disimpan. Lanjutkan saat Anda siap."
+                tr("Perubahan lokal tetap disimpan. Lanjutkan saat Anda siap.")
             } else {
-                "Folder Anda dipantau. Perubahan disinkronkan secara berkala."
+                tr("Folder Anda dipantau. Perubahan disinkronkan secara berkala.")
             }
         } else if status.is_some() {
-            "Menampilkan catatan terakhir. Mulai layanan untuk memperbarui status."
+            tr("Menampilkan catatan terakhir. Mulai layanan untuk memperbarui status.")
         } else if snapshot.configuration().is_some() {
-            "Folder sudah dikonfigurasi. Mulai layanan untuk menyinkronkan file."
+            tr("Folder sudah dikonfigurasi. Mulai layanan untuk menyinkronkan file.")
         } else {
-            "Hubungkan Google Drive melalui Akun dan folder untuk memulai."
+            tr("Hubungkan Google Drive melalui Akun dan folder untuk memulai.")
         });
         self.pause
-            .set_label(if paused { "Lanjutkan" } else { "Jeda" });
+            .set_label(if paused { tr("Lanjutkan") } else { tr("Jeda") });
         self.pause.set_sensitive(active && !busy);
         self.sync.set_sensitive(active && !paused && !busy);
         self.stop.set_sensitive(active && !busy);
@@ -186,50 +190,61 @@ impl Widgets {
                 &snapshot
                     .account
                     .as_ref()
-                    .map(|a| format!("Google Drive · {}", a.email))
-                    .unwrap_or_else(|| format!("Google Drive · Profil {}", s.config.account)),
+                    .map(|a| fmt("Google Drive · {}", &[("0", (a.email).to_string())]))
+                    .unwrap_or_else(|| {
+                        fmt(
+                            "Google Drive · Profil {}",
+                            &[("0", (s.config.account).to_string())],
+                        )
+                    }),
             );
             self.folder.set_text(&s.config.root.to_string_lossy());
-            self.remote.set_text(&format!(
+            self.remote.set_text(&fmt(
                 "Interval sinkronisasi: {} detik",
-                s.config.interval_seconds
+                &[("0", (s.config.interval_seconds).to_string())],
             ));
             self.pending.set_text(&s.pending_files.to_string());
             self.operations.set_text(&s.pending_operations.to_string());
             self.success.set_text(&time_text(s.last_success_ms));
             let stage = if !snapshot.live {
-                "Catatan terakhir"
+                tr("Catatan terakhir")
             } else if s.paused {
-                "Watcher lokal aktif"
+                tr("Watcher lokal aktif")
             } else if !s.cycle_active {
-                "Menunggu siklus berikutnya"
+                tr("Menunggu siklus berikutnya")
             } else {
                 match s.progress.stage.as_str() {
-                    "local_scan" => "Memindai perubahan lokal",
-                    "inventory" => "Membaca daftar file Drive",
-                    "change_feed" => "Memeriksa perubahan Drive",
-                    "reconciling" => "Menyelaraskan file",
-                    _ => "Menunggu siklus berikutnya",
+                    "local_scan" => tr("Memindai perubahan lokal"),
+                    "inventory" => tr("Membaca daftar file Drive"),
+                    "change_feed" => tr("Memeriksa perubahan Drive"),
+                    "reconciling" => tr("Menyelaraskan file"),
+                    _ => tr("Menunggu siklus berikutnya"),
                 }
             };
             if s.progress.inventory_pages > 0 {
-                self.stage.set_text(&format!(
+                self.stage.set_text(&fmt(
                     "{stage} · {} halaman / {} item inventaris",
-                    s.progress.inventory_pages, s.progress.inventory_items
+                    &[
+                        ("0", (s.progress.inventory_pages).to_string()),
+                        ("1", (s.progress.inventory_items).to_string()),
+                        ("stage", stage.to_string()),
+                    ],
                 ));
             } else {
                 self.stage.set_text(stage);
             }
             self.error.set_visible(s.last_error.is_some());
             self.error.set_text(match s.last_error.as_deref() {
-                None => "Tidak ada error pada siklus terakhir.",
+                None => tr("Tidak ada error pada siklus terakhir."),
                 Some("auth_required") => {
-                    "Login Google perlu diperbarui. Gunakan login ulang untuk melanjutkan."
+                    tr("Login Google perlu diperbarui. Gunakan login ulang untuk melanjutkan.")
                 }
-                Some("offline") => "Drive belum dapat dijangkau. Perubahan lokal tetap dicatat.",
-                Some(_) => {
-                    "Ada operasi yang perlu diperiksa. Lihat status file dan diagnostik service."
+                Some("offline") => {
+                    tr("Drive belum dapat dijangkau. Perubahan lokal tetap dicatat.")
                 }
+                Some(_) => tr(
+                    "Ada operasi yang perlu diperiksa. Lihat status file dan diagnostik service.",
+                ),
             });
         } else {
             if let Some(config) = snapshot.configuration() {
@@ -237,32 +252,38 @@ impl Widgets {
                     &snapshot
                         .account
                         .as_ref()
-                        .map(|a| format!("Google Drive · {}", a.email))
-                        .unwrap_or_else(|| format!("Google Drive · Profil {}", config.account)),
+                        .map(|a| fmt("Google Drive · {}", &[("0", (a.email).to_string())]))
+                        .unwrap_or_else(|| {
+                            fmt(
+                                "Google Drive · Profil {}",
+                                &[("0", (config.account).to_string())],
+                            )
+                        }),
                 );
                 self.folder.set_text(&config.root.to_string_lossy());
-                self.remote.set_text(&format!(
+                self.remote.set_text(&fmt(
                     "Interval sinkronisasi: {} detik",
-                    config.interval_seconds
+                    &[("0", (config.interval_seconds).to_string())],
                 ));
             } else {
-                self.profile.set_text("Google Drive");
-                self.folder.set_text("Belum dipilih");
-                self.remote.set_text("Belum dipilih");
+                self.profile.set_text(tr("Google Drive"));
+                self.folder.set_text(tr("Belum dipilih"));
+                self.remote.set_text(tr("Belum dipilih"));
             }
             self.pending.set_text("—");
             self.operations.set_text("—");
-            self.success.set_text("Belum ada");
-            self.stage.set_text("Menunggu konfigurasi");
-            self.error.set_text("Service belum tersedia.");
+            self.success.set_text(tr("Belum ada"));
+            self.stage.set_text(tr("Menunggu konfigurasi"));
+            self.error.set_text(tr("Service belum tersedia."));
             self.error.set_visible(false);
         }
     }
 }
 fn launch_uri(uri: &str, feedback: &gtk::Label) {
     if gio::AppInfo::launch_default_for_uri(uri, None::<&gio::AppLaunchContext>).is_err() {
-        feedback
-            .set_text("Folder atau browser tidak dapat dibuka. Periksa aplikasi default desktop.");
+        feedback.set_text(tr(
+            "Folder atau browser tidak dapat dibuka. Periksa aplikasi default desktop.",
+        ));
     }
 }
 fn build(
@@ -317,23 +338,23 @@ fn build(
     brand.set_halign(gtk::Align::Fill);
     brand.set_max_children_per_line(3);
     brand.insert(&label("☁  MyGdrive Rust", "brand"), -1);
-    let autostart = gtk::CheckButton::with_label("Mulai saat login");
+    let autostart = gtk::CheckButton::with_label(tr("Mulai saat login"));
     autostart.set_sensitive(false);
     brand.insert(&autostart, -1);
-    let exit = gtk::Button::with_label("Keluar");
-    exit.set_tooltip_text(Some(
+    let exit = gtk::Button::with_label(tr("Keluar"));
+    exit.set_tooltip_text(Some(tr(
         "Selesaikan sinkronisasi aktif, hentikan layanan, lalu keluar.",
-    ));
+    )));
     brand.insert(&exit, -1);
     navigation.append(&brand);
     let nav = flow();
     nav.set_halign(gtk::Align::Fill);
-    nav.insert(&label("Dashboard", "nav-item"), -1);
-    let activity_button = gtk::Button::with_label("Aktivitas sinkronisasi");
+    nav.insert(&label(tr("Dashboard"), "nav-item"), -1);
+    let activity_button = gtk::Button::with_label(tr("Aktivitas sinkronisasi"));
     nav.insert(&activity_button, -1);
-    let settings = gtk::Button::with_label("Akun dan folder");
+    let settings = gtk::Button::with_label(tr("Akun dan folder"));
     nav.insert(&settings, -1);
-    let offline_button = gtk::Button::with_label("Tersedia offline");
+    let offline_button = gtk::Button::with_label(tr("Tersedia offline"));
     nav.insert(&offline_button, -1);
     navigation.append(&nav);
     shell.append(&navigation);
@@ -342,36 +363,39 @@ fn build(
     content.set_hexpand(true);
     let heading = column(5);
     heading.append(&label(
-        &format!("RUANG KERJA ANDA  ·  v{}", env!("CARGO_PKG_VERSION")),
+        &fmt(
+            "RUANG KERJA ANDA  ·  v{}",
+            &[("0", (env!("CARGO_PKG_VERSION")).to_string())],
+        ),
         "eyebrow",
     ));
-    heading.append(&label("Dashboard", "title"));
+    heading.append(&label(tr("Dashboard"), "title"));
     heading.append(&label(
-        "Pantau file, kelola sinkronisasi, dan periksa pembaruan aplikasi di sini.",
+        tr("Pantau file, kelola sinkronisasi, dan periksa pembaruan aplikasi di sini."),
         "subtitle",
     ));
     content.append(&heading);
     let status_card = card();
     status_card.add_css_class("hero");
     let status_header = row();
-    let title = label("Menghubungkan ke service…", "status-title");
+    let title = label(tr("Menghubungkan ke service…"), "status-title");
     title.set_hexpand(true);
-    let pill = label("Memeriksa", "pill");
+    let pill = label(tr("Memeriksa"), "pill");
     status_header.append(&title);
     status_header.append(&pill);
     status_card.append(&status_header);
-    let description = label("Mengambil status sinkronisasi.", "subtitle");
+    let description = label(tr("Mengambil status sinkronisasi."), "subtitle");
     description.set_wrap(true);
     status_card.append(&description);
-    let stage = label("Menunggu status", "detail");
+    let stage = label(tr("Menunggu status"), "detail");
     stage.set_wrap(true);
     status_card.append(&stage);
     let buttons = flow();
-    let pause = gtk::Button::with_label("Jeda");
-    let sync = gtk::Button::with_label("Sinkronkan sekarang");
+    let pause = gtk::Button::with_label(tr("Jeda"));
+    let sync = gtk::Button::with_label(tr("Sinkronkan sekarang"));
     sync.add_css_class("suggested-action");
-    let start = gtk::Button::with_label("Mulai service");
-    let stop = gtk::Button::with_label("Hentikan service");
+    let start = gtk::Button::with_label(tr("Mulai service"));
+    let stop = gtk::Button::with_label(tr("Hentikan service"));
     for b in [&pause, &sync, &start, &stop] {
         b.set_sensitive(false);
         buttons.insert(b, -1);
@@ -380,10 +404,10 @@ fn build(
     content.append(&status_card);
     content.append(&updater::panel(snapshot_mode));
     let folder_card = card();
-    folder_card.append(&label("FOLDER TERHUBUNG", "eyebrow"));
-    let profile = label("Google Drive", "detail");
+    folder_card.append(&label(tr("FOLDER TERHUBUNG"), "eyebrow"));
+    let profile = label(tr("Google Drive"), "detail");
     folder_card.append(&profile);
-    let folder = label("Memuat…", "detail");
+    let folder = label(tr("Memuat…"), "detail");
     folder.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     folder.set_selectable(true);
     folder_card.append(&folder);
@@ -391,8 +415,8 @@ fn build(
     remote.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     folder_card.append(&remote);
     let links = flow();
-    let open = gtk::Button::with_label("Buka folder lokal");
-    let drive = gtk::Button::with_label("Buka di Drive");
+    let open = gtk::Button::with_label(tr("Buka folder lokal"));
+    let drive = gtk::Button::with_label(tr("Buka di Drive"));
     links.insert(&open, -1);
     links.insert(&drive, -1);
     folder_card.append(&links);
@@ -403,11 +427,11 @@ fn build(
     metrics.set_max_children_per_line(3);
     let pending = label("—", "value");
     let operations = label("—", "value");
-    let success = label("Belum ada", "detail");
+    let success = label(tr("Belum ada"), "detail");
     for (caption, value) in [
-        ("FILE MENUNGGU", &pending),
-        ("OPERASI TERTUNDA", &operations),
-        ("TERAKHIR BERHASIL", &success),
+        (tr("FILE MENUNGGU"), &pending),
+        (tr("OPERASI TERTUNDA"), &operations),
+        (tr("TERAKHIR BERHASIL"), &success),
     ] {
         let metric = card();
         metric.set_hexpand(true);
@@ -417,22 +441,22 @@ fn build(
     }
     content.append(&metrics);
     let activity_card = card();
-    activity_card.append(&label("AKTIVITAS SESI INI", "eyebrow"));
-    let error = label("Menunggu hasil service.", "detail");
+    activity_card.append(&label(tr("AKTIVITAS SESI INI"), "eyebrow"));
+    let error = label(tr("Menunggu hasil service."), "detail");
     error.set_wrap(true);
     status_card.append(&error);
     error.set_visible(false);
-    let activity = label("Belum ada aktivitas pada jendela ini.", "activity");
+    let activity = label(tr("Belum ada aktivitas pada jendela ini."), "activity");
     activity.set_wrap(true);
     activity_card.append(&activity);
-    let expander = gtk::Expander::new(Some("Aktivitas sesi ini"));
+    let expander = gtk::Expander::new(Some(tr("Aktivitas sesi ini")));
     expander.set_child(Some(&activity_card));
     content.append(&expander);
-    let notice=label("File diunduh saat dibuka. Gunakan Tersedia offline agar file bisa dibuka tanpa internet. Perubahan lokal tetap disimpan saat koneksi terputus.","notice");
+    let notice=label(tr("File diunduh saat dibuka. Gunakan Tersedia offline agar file bisa dibuka tanpa internet. Perubahan lokal tetap disimpan saat koneksi terputus."),"notice");
     notice.set_wrap(true);
     content.append(&notice);
     let feedback = label(
-        "Menutup jendela ini tetap membiarkan service berjalan.",
+        tr("Menutup jendela ini tetap membiarkan service berjalan."),
         "subtitle",
     );
     feedback.set_wrap(true);
@@ -569,7 +593,7 @@ fn build(
             {
                 busy.set(true);
                 button.set_sensitive(false);
-                feedback.set_text("Memperbarui mulai saat login…");
+                feedback.set_text(tr("Memperbarui mulai saat login…"));
             }
         });
     }
@@ -600,11 +624,12 @@ fn build(
             });
             if controller.commands.try_send(command).is_ok() {
                 busy.set(true);
-                feedback.set_text("Memproses permintaan…");
+                feedback.set_text(tr("Memproses permintaan…"));
                 widgets.render(&current.borrow(), true);
             } else {
-                feedback
-                    .set_text("Antrean kontrol sedang penuh. Coba lagi setelah status diperbarui.");
+                feedback.set_text(tr(
+                    "Antrean kontrol sedang penuh. Coba lagi setelah status diperbarui.",
+                ));
             }
         });
     }
@@ -655,7 +680,7 @@ fn build(
     let background_deadline = std::time::Instant::now() + Duration::from_secs(11);
     if start_service && !snapshot_mode && controller.commands.try_send(Command::Start).is_ok() {
         busy.set(true);
-        feedback.set_text("Memulai service dari konfigurasi tersimpan…");
+        feedback.set_text(tr("Memulai service dari konfigurasi tersimpan…"));
     }
     glib::timeout_add_local(Duration::from_millis(100), move || {
         let Some(window) = weak.upgrade() else {
@@ -668,9 +693,9 @@ fn build(
             let available = tray.available();
             if tray_ready.replace(available) && !available {
                 window.present();
-                feedback.set_text(
+                feedback.set_text(tr(
                     "Tray terputus. Dashboard ditampilkan agar aplikasi tetap dapat diakses.",
-                );
+                ));
             }
             if background_pending && available {
                 window.set_visible(false);
@@ -694,7 +719,7 @@ fn build(
                     Ok(tray::Event::Control(command)) => {
                         if !busy.get() && controller.commands.try_send(command).is_ok() {
                             busy.set(true);
-                            feedback.set_text("Memproses permintaan tray…");
+                            feedback.set_text(tr("Memproses permintaan tray…"));
                             widgets.render(&current.borrow(), true);
                         }
                     }
@@ -705,7 +730,7 @@ fn build(
         if background_pending && std::time::Instant::now() >= background_deadline {
             background_pending = false;
             window.present();
-            feedback.set_text("Tray belum tersedia. Dashboard tetap terbuka.");
+            feedback.set_text(tr("Tray belum tersedia. Dashboard tetap terbuka."));
         }
         if quit_requested.get()
             && !busy.get()
@@ -717,9 +742,9 @@ fn build(
             quit_requested.set(false);
             busy.set(true);
             window.present();
-            feedback.set_text(
+            feedback.set_text(tr(
                 "Menunggu sinkronisasi aktif selesai dan service berhenti sebelum keluar…",
-            );
+            ));
             widgets.render(&current.borrow(), true);
         }
         exit.set_sensitive(!busy.get());
@@ -739,17 +764,19 @@ fn build(
                         {
                             last_cycle = s.last_sync_finished_ms;
                             let message = if let Some(r) = &s.last_report {
-                                format!(
+                                fmt(
                                     "{} · {} selesai, {} konflik, {} ditunda",
-                                    time_text(s.last_sync_finished_ms),
-                                    r.completed,
-                                    r.conflicts,
-                                    r.deferred
+                                    &[
+                                        ("0", (time_text(s.last_sync_finished_ms)).to_string()),
+                                        ("1", (r.completed).to_string()),
+                                        ("2", (r.conflicts).to_string()),
+                                        ("3", (r.deferred).to_string()),
+                                    ],
                                 )
                             } else {
-                                format!(
+                                fmt(
                                     "{} · Siklus perlu diperiksa",
-                                    time_text(s.last_sync_finished_ms)
+                                    &[("0", (time_text(s.last_sync_finished_ms)).to_string())],
                                 )
                             };
                             history.push_front(message);
@@ -808,7 +835,7 @@ fn build(
                     }
                     busy.set(false);
                     widgets.render(&current.borrow(), false);
-                    feedback.set_text("Worker dashboard berhenti. Buka kembali aplikasi untuk menghubungkan ulang.");
+                    feedback.set_text(tr("Worker dashboard berhenti. Buka kembali aplikasi untuk menghubungkan ulang."));
                     return glib::ControlFlow::Break;
                 }
             }
@@ -863,6 +890,7 @@ fn build(
 }
 fn main() -> glib::ExitCode {
     let args = Args::parse();
+    mygdrive_sync::i18n::initialize(Some(&args.language));
     let state = args.state.unwrap_or_else(|| {
         directories::BaseDirs::new()
             .expect("user data directory")

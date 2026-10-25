@@ -1,5 +1,6 @@
 use super::{column, flow, label, launch_uri, row, time_text};
 use gtk::{glib, prelude::*};
+use mygdrive_sync::i18n::{fmt, tr};
 use mygdrive_sync::{
     offline::{Node, Page},
     offline_controller::{self, Command, Event, Job},
@@ -32,25 +33,30 @@ struct Ui {
 fn state_text(node: &Node, complete: bool) -> String {
     let c = &node.counts;
     let status = if !complete {
-        "Inventaris belum lengkap"
+        tr("Inventaris belum lengkap")
     } else if c.unsupported > 0 {
-        "Ada format/izin yang belum didukung"
+        tr("Ada format/izin yang belum didukung")
     } else if c.review > 0 {
-        "Perlu tinjauan"
+        tr("Perlu tinjauan")
     } else if c.total == 0 {
-        "Folder kosong pada inventaris"
+        tr("Folder kosong pada inventaris")
     } else if !node.effective && c.ready == 0 {
-        "Hanya online (konten belum diunduh)"
+        tr("Hanya online (konten belum diunduh)")
     } else if !node.effective && c.ready < c.total {
-        "Sebagian lokal, sisanya hanya online"
+        tr("Sebagian lokal, sisanya hanya online")
     } else if c.ready == c.total {
-        "File lokal tersedia"
+        tr("File lokal tersedia")
     } else {
-        "Menunggu unduhan/pemeriksaan"
+        tr("Menunggu unduhan/pemeriksaan")
     };
-    format!(
+    fmt(
         "{status} · {}/{} file lokal · {} perubahan tertunda",
-        c.ready, c.total, c.dirty
+        &[
+            ("0", (c.ready).to_string()),
+            ("1", (c.total).to_string()),
+            ("2", (c.dirty).to_string()),
+            ("status", status.to_string()),
+        ],
     )
 }
 impl Ui {
@@ -69,14 +75,15 @@ impl Ui {
         {
             self.revision.set(self.revision.get() + 1);
             self.busy.set(true);
-            self.feedback.set_text("Memproses inventaris/pilihan…");
+            self.feedback.set_text(tr("Memproses inventaris/pilihan…"));
             self.list.set_sensitive(false);
             for b in [&self.back, &self.next, &self.reload, &self.current_pin] {
                 b.set_sensitive(false);
             }
         } else {
-            self.feedback
-                .set_text("Worker belum tersedia. Tutup dan buka kembali jendela ini.");
+            self.feedback.set_text(tr(
+                "Worker belum tersedia. Tutup dan buka kembali jendela ini.",
+            ));
         }
     }
     fn choose(&self, target: String, pinned: bool) {
@@ -94,17 +101,22 @@ impl Ui {
         self.busy.set(false);
         self.live.set(live);
         self.title.set_text(&page.current.name);
-        self.summary.set_text(&format!(
+        self.summary.set_text(&fmt(
             "{}\nInventaris diperiksa: {}",
-            state_text(&page.current, page.inventory_complete),
-            time_text(page.last_verified_ms)
+            &[
+                (
+                    "0",
+                    (state_text(&page.current, page.inventory_complete)).to_string(),
+                ),
+                ("1", (time_text(page.last_verified_ms)).to_string()),
+            ],
         ));
         self.current_pin.set_label(if page.current.selected {
-            "Lepas pilihan folder ini"
+            tr("Lepas pilihan folder ini")
         } else if page.current.inherited {
-            "Diwariskan dari folder induk"
+            tr("Diwariskan dari folder induk")
         } else {
-            "Jadikan folder ini tersedia offline"
+            tr("Jadikan folder ini tersedia offline")
         });
         self.current_pin.set_sensitive(
             live && !self.preview && (!page.current.inherited || page.current.selected),
@@ -150,11 +162,11 @@ impl Ui {
                 header.append(&name);
             }
             let pin = gtk::Button::with_label(if node.selected {
-                "Lepas pilihan"
+                tr("Lepas pilihan")
             } else if node.inherited {
-                "Diwariskan"
+                tr("Diwariskan")
             } else {
-                "Tersedia offline"
+                tr("Tersedia offline")
             });
             pin.set_sensitive(live && !self.preview && (!node.inherited || node.selected));
             let weak = Rc::downgrade(self);
@@ -173,9 +185,9 @@ impl Ui {
             if node.effective {
                 entry.append(&label(
                     if node.inherited {
-                        "Pilihan induk berlaku, termasuk anak baru."
+                        tr("Pilihan induk berlaku, termasuk anak baru.")
                     } else {
-                        "Pilihan offline aktif."
+                        tr("Pilihan offline aktif.")
                     },
                     "detail",
                 ));
@@ -184,23 +196,23 @@ impl Ui {
         }
         if page.children.is_empty() {
             self.list.append(&label(
-                "Belum ada file/subfolder pada halaman ini.",
+                tr("Belum ada file/subfolder pada halaman ini."),
                 "subtitle",
             ));
         }
         self.feedback.set_text(if !live {
-            "Mode baca inventaris terakhir. Mulai service untuk mengubah pilihan; Muat ulang memeriksa file lokal lagi."
+            tr("Mode baca inventaris terakhir. Mulai service untuk mengubah pilihan; Muat ulang memeriksa file lokal lagi.")
         } else if page.service_paused {
-            "Service sedang dijeda. Pilihan tetap tersimpan; tekan Lanjutkan pada dashboard agar file/folder pilihan diunduh. Induk tidak perlu dipilih offline."
+            tr("Service sedang dijeda. Pilihan tetap tersimpan; tekan Lanjutkan pada dashboard agar file/folder pilihan diunduh. Induk tidak perlu dipilih offline.")
         } else {
-            "File atau subfolder dapat dipilih sendiri meskipun induknya hanya online. Pilihan folder mencakup semua anak dan anak baru. Tunggu status file lokal tersedia sebelum memutus internet."
+            tr("File atau subfolder dapat dipilih sendiri meskipun induknya hanya online. Pilihan folder mencakup semua anak dan anak baru. Tunggu status file lokal tersedia sebelum memutus internet.")
         });
         *self.page.borrow_mut() = Some(page);
     }
 }
 pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> gtk::Window {
     let window = gtk::Window::builder()
-        .title("Tersedia offline · MyGdrive Rust")
+        .title(tr("Tersedia offline · MyGdrive Rust"))
         .transient_for(parent)
         .modal(true)
         .default_width(820)
@@ -210,29 +222,29 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
     window.set_destroy_with_parent(true);
     let content = column(10);
     content.add_css_class("content");
-    let heading = label("Tersedia offline", "title");
+    let heading = label(tr("Tersedia offline"), "title");
     heading.set_focusable(true);
     content.append(&heading);
-    let intro=label("Pilih file atau folder untuk digunakan tanpa internet. Memilih folder juga mengunduh seluruh isinya.","subtitle");
+    let intro=label(tr("Pilih file atau folder untuk digunakan tanpa internet. Memilih folder juga mengunduh seluruh isinya."),"subtitle");
     intro.set_wrap(true);
     content.append(&intro);
-    let title = label("Memuat inventaris…", "status-title");
+    let title = label(tr("Memuat inventaris…"), "status-title");
     title.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     content.append(&title);
-    let summary = label("Memeriksa file lokal…", "detail");
+    let summary = label(tr("Memeriksa file lokal…"), "detail");
     summary.set_wrap(true);
     content.append(&summary);
     let nav = flow();
-    let back = gtk::Button::with_label("Naik");
-    let reload = gtk::Button::with_label("Muat ulang");
-    let next = gtk::Button::with_label("Halaman berikutnya");
-    let open = gtk::Button::with_label("Buka folder lokal");
+    let back = gtk::Button::with_label(tr("Naik"));
+    let reload = gtk::Button::with_label(tr("Muat ulang"));
+    let next = gtk::Button::with_label(tr("Halaman berikutnya"));
+    let open = gtk::Button::with_label(tr("Buka folder lokal"));
     for b in [&back, &reload, &next, &open] {
         b.set_sensitive(false);
         nav.insert(b, -1);
     }
     content.append(&nav);
-    let current_pin = gtk::Button::with_label("Jadikan folder ini tersedia offline");
+    let current_pin = gtk::Button::with_label(tr("Jadikan folder ini tersedia offline"));
     current_pin.add_css_class("suggested-action");
     current_pin.set_sensitive(false);
     content.append(&current_pin);
@@ -245,16 +257,16 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
         .build();
     content.append(&scroll);
     let notice_text = if std::env::var_os("FLATPAK_ID").is_some() {
-        "Pilih tersedia offline untuk mengunduh konten ke folder lokal. Drive virtual dan menu Thunar tersedia pada paket .deb. Melepas pin mengantrekan pembersihan salinan bersih; perubahan tertunda dan file terbuka tetap dilindungi. File di Drive tetap ada. Offline Google Docs/Sheets/Slides belum didukung."
+        tr("Pilih tersedia offline untuk mengunduh konten ke folder lokal. Drive virtual dan menu Thunar tersedia pada paket .deb. Melepas pin mengantrekan pembersihan salinan bersih; perubahan tertunda dan file terbuka tetap dilindungi. File di Drive tetap ada. Offline Google Docs/Sheets/Slides belum didukung.")
     } else {
-        "Konten diunduh saat dibuka melalui drive online atau dipilih offline. Melepas pin mengantrekan pembersihan file bersih dan cache terkait; perubahan tertunda, file terbuka, dan pin yang masih berlaku tetap dilindungi. File di Drive tetap ada dan dapat diunduh kembali. Offline Google Docs/Sheets/Slides belum didukung."
+        tr("Konten diunduh saat dibuka melalui drive online atau dipilih offline. Melepas pin mengantrekan pembersihan file bersih dan cache terkait; perubahan tertunda, file terbuka, dan pin yang masih berlaku tetap dilindungi. File di Drive tetap ada dan dapat diunduh kembali. Offline Google Docs/Sheets/Slides belum didukung.")
     };
     let notice = label(notice_text, "notice");
     notice.set_wrap(true);
-    let help = gtk::Expander::new(Some("Cara kerja pilihan offline"));
+    let help = gtk::Expander::new(Some(tr("Cara kerja pilihan offline")));
     help.set_child(Some(&notice));
     content.append(&help);
-    let feedback = label("Menunggu inventaris service…", "subtitle");
+    let feedback = label(tr("Menunggu inventaris service…"), "subtitle");
     feedback.set_wrap(true);
     content.append(&feedback);
     let outer = gtk::ScrolledWindow::builder()
@@ -265,7 +277,7 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
     let worker = match offline_controller::spawn(state) {
         Ok(w) => w,
         Err(_) => {
-            feedback.set_text("Worker offline tidak dapat dimulai.");
+            feedback.set_text(tr("Worker offline tidak dapat dimulai."));
             window.present();
             return window;
         }

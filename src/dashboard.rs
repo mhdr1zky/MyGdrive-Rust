@@ -1,4 +1,5 @@
 //! GTK-independent desktop controller. All filesystem/IPC work stays off the UI thread.
+use crate::i18n::tr;
 use crate::{
     service::{self, Action, Request, ServiceStatus},
     Error, Result,
@@ -31,22 +32,22 @@ pub enum Notice {
 impl Notice {
     pub fn title(self) -> &'static str {
         match self {
-            Self::Reconnecting => "Menghubungkan ulang ke layanan",
-            Self::Offline => "Offline — menunggu koneksi",
-            Self::AuthRequired => "Login Google diperlukan",
-            Self::Throttled => "Menunggu batas layanan Drive",
-            Self::Error => "Sinkronisasi perlu diperiksa",
-            Self::Stopped => "Layanan tidak aktif / sedang berhenti",
+            Self::Reconnecting => tr("Menghubungkan ulang ke layanan"),
+            Self::Offline => tr("Offline — menunggu koneksi"),
+            Self::AuthRequired => tr("Login Google diperlukan"),
+            Self::Throttled => tr("Menunggu batas layanan Drive"),
+            Self::Error => tr("Sinkronisasi perlu diperiksa"),
+            Self::Stopped => tr("Layanan tidak aktif / sedang berhenti"),
         }
     }
     pub fn description(self) -> &'static str {
         match self {
-            Self::Reconnecting=>"Antarmuka belum terhubung ke layanan. Riwayat selesai tetap tersimpan; status sedang diperiksa ulang.",
-            Self::Offline=>"Koneksi Drive terputus. Perubahan tetap tersimpan dan akan dicoba ulang otomatis.",
-            Self::AuthRequired=>"Izin Google perlu diperbarui. Buka Akun dan folder → Login ulang akun terpilih.",
-            Self::Throttled=>"Drive membatasi permintaan. Aplikasi menunggu sebelum mencoba lagi.",
-            Self::Error=>"Layanan melaporkan kesalahan sinkronisasi. Riwayat unggahan selesai di bawah bukan status seluruh layanan; periksa operasi tertunda dan dashboard.",
-            Self::Stopped=>"Layanan tidak aktif atau sedang berhenti. Riwayat di bawah adalah hasil operasi sebelumnya.",
+            Self::Reconnecting=>tr("Antarmuka belum terhubung ke layanan. Riwayat selesai tetap tersimpan; status sedang diperiksa ulang."),
+            Self::Offline=>tr("Koneksi Drive terputus. Perubahan tetap tersimpan dan akan dicoba ulang otomatis."),
+            Self::AuthRequired=>tr("Izin Google perlu diperbarui. Buka Akun dan folder → Login ulang akun terpilih."),
+            Self::Throttled=>tr("Drive membatasi permintaan. Aplikasi menunggu sebelum mencoba lagi."),
+            Self::Error=>tr("Layanan melaporkan kesalahan sinkronisasi. Riwayat unggahan selesai di bawah bukan status seluruh layanan; periksa operasi tertunda dan dashboard."),
+            Self::Stopped=>tr("Layanan tidak aktif atau sedang berhenti. Riwayat di bawah adalah hasil operasi sebelumnya."),
         }
     }
     pub fn is_error(self) -> bool {
@@ -86,27 +87,27 @@ impl Snapshot {
     }
     pub fn title(&self) -> &'static str {
         let Some(s) = self.status.as_ref().filter(|_| self.live) else {
-            return "Service tidak aktif";
+            return tr("Service tidak aktif");
         };
         if s.shutdown_requested {
-            "Sedang berhenti"
+            tr("Sedang berhenti")
         } else if s.paused && s.cycle_active {
-            "Menunggu jeda"
+            tr("Menunggu jeda")
         } else if s.paused {
-            "Sinkronisasi dijeda"
+            tr("Sinkronisasi dijeda")
         } else if s.cycle_active && s.progress.has_file_activity(crate::now_ms()) {
-            "Menyinkronkan"
+            tr("Menyinkronkan")
         } else if s.cycle_active {
-            "Memeriksa perubahan Drive"
+            tr("Memeriksa perubahan Drive")
         } else {
             match s.connection {
-                crate::connectivity::ConnectionState::AuthRequired => "Login diperlukan",
-                crate::connectivity::ConnectionState::Offline => "Offline",
-                crate::connectivity::ConnectionState::Throttled => "Menunggu batas layanan",
-                crate::connectivity::ConnectionState::ServiceError => "Perlu diperiksa",
-                _ if s.last_error.is_some() => "Perlu diperiksa",
-                _ if s.last_success_ms.is_some() && s.pending_files == 0 => "Semua tersinkron",
-                _ => "Menunggu sinkronisasi",
+                crate::connectivity::ConnectionState::AuthRequired => tr("Login diperlukan"),
+                crate::connectivity::ConnectionState::Offline => tr("Offline"),
+                crate::connectivity::ConnectionState::Throttled => tr("Menunggu batas layanan"),
+                crate::connectivity::ConnectionState::ServiceError => tr("Perlu diperiksa"),
+                _ if s.last_error.is_some() => tr("Perlu diperiksa"),
+                _ if s.last_success_ms.is_some() && s.pending_files == 0 => tr("Semua tersinkron"),
+                _ => tr("Menunggu sinkronisasi"),
             }
         }
     }
@@ -157,9 +158,9 @@ pub fn spawn_observer(
     let stop = CancellationToken::new();
     let worker_stop = stop.clone();
     std::thread::Builder::new().name("mygdrive-desktop-io".into()).spawn(move || {
-        let runtime=match tokio::runtime::Builder::new_current_thread().enable_all().build(){Ok(r)=>r,Err(_)=>{let _=events.send(Event::Completed(Err("Worker aplikasi tidak dapat dimulai.".into())));return;}};
+        let runtime=match tokio::runtime::Builder::new_current_thread().enable_all().build(){Ok(r)=>r,Err(_)=>{let _=events.send(Event::Completed(Err(tr("Worker aplikasi tidak dapat dimulai.").into())));return;}};
         runtime.block_on(async move {
-            let settings=||crate::autostart::for_profile(&state,&binary).and_then(|s|s.enabled()).map_err(|_|"Status autostart belum dapat dibaca.".to_string());
+            let settings=||crate::autostart::for_profile(&state,&binary).and_then(|s|s.enabled()).map_err(|_|tr("Status autostart belum dapat dibaca.").to_string());
             let _=events.send(Event::Autostart(settings()));
             let _=events.send(Event::Snapshot(Box::new(read_snapshot(&state).await)));
             if let Ok(config)=service::load_config(&state) {
@@ -176,7 +177,7 @@ pub fn spawn_observer(
                             let Some(command)=command else{return false;};
                             let result=perform(&state,&binary,command).await;
                             if matches!(command,Command::SetAutostart(_)){let _=events.send(Event::Autostart(settings()));}
-                            let event=if matches!(command,Command::ShutdownAndWait) && result.is_ok(){Event::ExitReady}else{Event::Completed(result.map_err(|_|"Perintah belum terkonfirmasi. Periksa status service sebelum mencoba kembali.".into()))};
+                            let event=if matches!(command,Command::ShutdownAndWait) && result.is_ok(){Event::ExitReady}else{Event::Completed(result.map_err(|_|tr("Perintah belum terkonfirmasi. Periksa status service sebelum mencoba kembali.").into()))};
                             if events.send(event).is_err(){return false;}
                         },
                         _=poll.tick()=>{},
@@ -220,21 +221,21 @@ pub async fn read_snapshot(state: &Path) -> Snapshot {
 }
 pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'static str> {
     if matches!(command, Command::ShutdownAndWait) && engine_available(state)? {
-        return Ok("Service sudah berhenti.");
+        return Ok(tr("Service sudah berhenti."));
     }
     if let Command::SetAutostart(enabled) = command {
         service::load_config(state)?;
         crate::autostart::for_profile(state, binary)?.set_enabled(enabled)?;
         return Ok(if enabled {
-            "Profil ini akan dimulai saat login Linux."
+            tr("Profil ini akan dimulai saat login Linux.")
         } else {
-            "Mulai saat login dinonaktifkan untuk profil ini."
+            tr("Mulai saat login dinonaktifkan untuk profil ini.")
         });
     }
     if matches!(command, Command::Start) {
         // Never start a second writer when a live control endpoint is already responding.
         if read_snapshot(state).await.live {
-            return Ok("Service sudah berjalan.");
+            return Ok(tr("Service sudah berjalan."));
         }
         let config = service::load_config(state)?;
         let log = OpenOptions::new()
@@ -260,7 +261,7 @@ pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'
         for _ in 0..30 {
             tokio::time::sleep(Duration::from_millis(200)).await;
             if read_snapshot(state).await.live {
-                return Ok("Service aktif. Jeda sebelumnya tetap dipertahankan.");
+                return Ok(tr("Service aktif. Jeda sebelumnya tetap dipertahankan."));
             }
         }
         return Err(Error::Invalid("service startup not confirmed".into()));
@@ -292,13 +293,13 @@ pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        return Ok("Service berhenti dengan tertib.");
+        return Ok(tr("Service berhenti dengan tertib."));
     }
     Ok(match command {
-        Command::Pause => "Jeda diterima. Siklus aktif diselesaikan terlebih dahulu.",
-        Command::Resume => "Sinkronisasi dilanjutkan.",
-        Command::SyncNow => "Sinkronisasi telah dijadwalkan.",
-        Command::Shutdown => "Service akan berhenti setelah siklus aktif selesai.",
+        Command::Pause => tr("Jeda diterima. Siklus aktif diselesaikan terlebih dahulu."),
+        Command::Resume => tr("Sinkronisasi dilanjutkan."),
+        Command::SyncNow => tr("Sinkronisasi telah dijadwalkan."),
+        Command::Shutdown => tr("Service akan berhenti setelah siklus aktif selesai."),
         Command::ShutdownAndWait => unreachable!(),
         Command::Start | Command::SetAutostart(_) => unreachable!(),
     })
@@ -367,27 +368,27 @@ pub async fn read_activity_page(state: &Path) -> Result<ActivityPage> {
         for (data, path) in rows {
             let op: crate::model::Operation = serde_json::from_str(&data)?;
             let operation = match op.kind.as_str() {
-                "create" | "upload" => "Unggah",
-                "download" => "Unduh",
-                "conflict" => "Simpan salinan konflik",
-                "rename" | "remote_move" => "Pindah / ubah nama",
-                "trash" | "remote_trash" => "Hapus",
-                _ => "Sinkronisasi",
+                "create" | "upload" => tr("Unggah"),
+                "download" => tr("Unduh"),
+                "conflict" => tr("Simpan salinan konflik"),
+                "rename" | "remote_move" => tr("Pindah / ubah nama"),
+                "trash" | "remote_trash" => tr("Hapus"),
+                _ => tr("Sinkronisasi"),
             }
             .to_string();
             let detail = if done {
-                "Selesai".into()
+                tr("Selesai").into()
             } else if let Some(error) = &op.last_error {
                 crate::diagnostics::FileIssue::from_legacy(error)
                     .description()
                     .into()
             } else {
                 match op.stage.as_str() {
-                    "planned" => "Dalam antrean",
-                    "snapshot_ready" => "Menyiapkan / mengirim konten",
-                    "remote_committed" => "Memverifikasi hasil di Drive",
-                    "downloaded" => "Memasang file lokal",
-                    _ => "Sedang diproses",
+                    "planned" => tr("Dalam antrean"),
+                    "snapshot_ready" => tr("Menyiapkan / mengirim konten"),
+                    "remote_committed" => tr("Memverifikasi hasil di Drive"),
+                    "downloaded" => tr("Memasang file lokal"),
+                    _ => tr("Sedang diproses"),
                 }
                 .into()
             };
@@ -412,15 +413,15 @@ pub async fn read_activity_page(state: &Path) -> Result<ActivityPage> {
                     id: format!("local:{}:{}", file.id, file.generation),
                     path: file.relative_path,
                     operation: if file.status == "deleted_local" {
-                        "Hapus"
+                        tr("Hapus")
                     } else {
-                        "Unggah / ubah"
+                        tr("Unggah / ubah")
                     }
                     .into(),
                     detail: file
                         .metadata_issue
                         .map(|issue| issue.description())
-                        .unwrap_or("Perubahan tercatat — menunggu giliran sinkronisasi")
+                        .unwrap_or(tr("Perubahan tercatat — menunggu giliran sinkronisasi"))
                         .into(),
                     pending: true,
                     retrying: file.metadata_issue.is_some(),

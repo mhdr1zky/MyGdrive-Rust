@@ -55,6 +55,8 @@ install -d "$package_dir/DEBIAN" "$app_dir/bin" "$app_dir/scripts" "$app_dir/ass
     "$package_dir/usr/share/icons/hicolor/scalable/apps" \
     "$package_dir/usr/share/icons/hicolor/scalable/emblems" \
     "$package_dir/usr/share/doc/mygdrive-rust"
+install -d "$app_dir/assets/locales"
+install -m644 assets/locales/*.json "$app_dir/assets/locales/"
 for binary in mygdrive-sync mygdrive-desktop mygdrive-mount; do
     install -m 0755 "$target_dir/release/$binary" "$app_dir/bin/$binary"
 done
@@ -76,7 +78,7 @@ install -m 0644 LICENSE "$package_dir/usr/share/doc/mygdrive-rust/copyright"
 for document in README.md OAUTH_SETUP.md CHANGELOG.md LICENSE; do
     install -m 0644 "$document" "$package_dir/usr/share/doc/mygdrive-rust/$document"
 done
-for document in docs/PERFORMANCE.md docs/screenshots/*.png; do
+for document in docs/PERFORMANCE.md docs/LOCALIZATION.md docs/screenshots/*.png; do
     install -Dm0644 "$document" "$package_dir/usr/share/doc/mygdrive-rust/$document"
 done
 for hook in postinst postrm; do

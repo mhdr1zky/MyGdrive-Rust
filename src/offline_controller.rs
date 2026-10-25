@@ -1,4 +1,5 @@
 //! Offline browser worker: no GTK-thread disk, hashing, network or SQLite writes.
+use crate::i18n::tr;
 use crate::{
     db::Database,
     offline::{Graph, Page, Request as OfflineRequest},
@@ -65,13 +66,14 @@ pub async fn browse(state: &Path, parent: &str, offset: usize) -> Result<(Page, 
             let reply = service::send(state, &request).await?;
             if reply.accepted {
                 let mut page = reply.offline.ok_or_else(|| {
-                    Error::Invalid("Restart service untuk mengaktifkan browser offline.".into())
+                    Error::Invalid(tr("Restart service untuk mengaktifkan browser offline.").into())
                 })?;
                 page.service_paused = reply.status.paused;
                 return Ok((page, true));
             }
             return Err(Error::Invalid(
-                "Folder berubah atau service perlu dimulai ulang. Muat ulang inventaris.".into(),
+                tr("Folder berubah atau service perlu dimulai ulang. Muat ulang inventaris.")
+                    .into(),
             ));
         }
     }
@@ -84,7 +86,7 @@ pub async fn browse(state: &Path, parent: &str, offset: usize) -> Result<(Page, 
 pub async fn select(state: &Path, target: &str, pinned: bool) -> Result<()> {
     let status = service::send(state, &Request::new(Action::Status)).await?;
     if !status.accepted {
-        return Err(Error::Invalid("Service belum tersedia.".into()));
+        return Err(Error::Invalid(tr("Service belum tersedia.").into()));
     }
     let mut request = Request::new(Action::OfflineSet);
     request.session_id = Some(status.status.session_id);
@@ -98,7 +100,7 @@ pub async fn select(state: &Path, target: &str, pinned: bool) -> Result<()> {
     };
     if !reply.accepted {
         return Err(Error::Invalid(
-            "Pilihan belum terkonfirmasi. Muat ulang folder sebelum mencoba lagi.".into(),
+            tr("Pilihan belum terkonfirmasi. Muat ulang folder sebelum mencoba lagi.").into(),
         ));
     }
     Ok(())
@@ -167,7 +169,7 @@ async fn run_worker(
         let event=match result {
             Ok((page,live))=>Event::Page{page:Box::new(page),live,revision},
             Err(Error::Invalid(message))=>Event::Error{message,revision},
-            Err(_)=>Event::Error{message:"Inventaris belum dapat dibaca. Mulai atau perbarui service lalu muat ulang; pilihan yang belum terkonfirmasi perlu diperiksa kembali.".into(),revision},
+            Err(_)=>Event::Error{message:tr("Inventaris belum dapat dibaca. Mulai atau perbarui service lalu muat ulang; pilihan yang belum terkonfirmasi perlu diperiksa kembali.").into(),revision},
         };
         if events.send(event).is_err() {
             break;
@@ -190,7 +192,7 @@ pub fn spawn(state: PathBuf) -> Result<Controller> {
                 .build()
             else {
                 let _ = events.send(Event::Error {
-                    message: "Worker offline tidak dapat dimulai.".into(),
+                    message: tr("Worker offline tidak dapat dimulai.").into(),
                     revision: 0,
                 });
                 return;

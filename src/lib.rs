@@ -15,6 +15,7 @@ pub mod drive;
 #[cfg(feature = "virtual-drive")]
 mod emblems;
 pub mod engine;
+pub mod i18n;
 mod keyed_lock;
 pub mod local;
 mod memory;

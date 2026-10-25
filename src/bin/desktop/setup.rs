@@ -1,5 +1,6 @@
 use super::{card, column, flow, label};
 use gtk::{glib, prelude::*};
+use mygdrive_sync::i18n::{fmt, tr};
 use mygdrive_sync::onboarding::{self, Command, Event, FolderPage};
 use std::{
     cell::{Cell, RefCell},
@@ -16,6 +17,7 @@ fn open_profile(state: &std::path::Path) -> bool {
         return false;
     };
     match std::process::Command::new(launcher)
+        .env("MYGDRIVE_LANGUAGE", mygdrive_sync::i18n::current_language())
         .arg("--state")
         .arg(state)
         .stdin(std::process::Stdio::null())
@@ -39,14 +41,14 @@ fn choose(
 ) {
     let chooser = gtk::FileChooserNative::new(
         Some(if action == gtk::FileChooserAction::SelectFolder {
-            "Pilih folder lokal kosong"
+            tr("Pilih folder lokal kosong")
         } else {
-            "Pilih JSON client OAuth Desktop"
+            tr("Pilih JSON client OAuth Desktop")
         }),
         Some(parent),
         action,
-        Some("Pilih"),
-        Some("Batal"),
+        Some(tr("Pilih")),
+        Some(tr("Batal")),
     );
     if action == gtk::FileChooserAction::Open {
         let filter = gtk::FileFilter::new();
@@ -125,7 +127,7 @@ impl Ui {
             self.feedback.set_text(message);
         } else {
             self.feedback
-                .set_text("Worker belum tersedia. Tutup dan buka lagi pengaturan.");
+                .set_text(tr("Worker belum tersedia. Tutup dan buka lagi pengaturan."));
         }
         self.update();
     }
@@ -137,7 +139,7 @@ impl Ui {
         *self.next.borrow_mut() = None;
         self.send(
             Command::Browse { parent, page },
-            "Membaca folder Google Drive…",
+            tr("Membaca folder Google Drive…"),
         );
     }
     fn fill(self: &Rc<Self>, page: FolderPage) {
@@ -145,8 +147,10 @@ impl Ui {
             self.folders.remove(&child);
         }
         if page.files.is_empty() {
-            self.folders
-                .append(&label("Tidak ada subfolder pada halaman ini.", "subtitle"));
+            self.folders.append(&label(
+                tr("Tidak ada subfolder pada halaman ini."),
+                "subtitle",
+            ));
         }
         for folder in page.files {
             let button = gtk::Button::with_label(&format!("📁  {}", folder.name));
@@ -186,7 +190,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
         current.clone()
     };
     let window = gtk::Window::builder()
-        .title("Akun dan folder · MyGdrive Rust")
+        .title(tr("Akun dan folder · MyGdrive Rust"))
         .transient_for(parent)
         .modal(true)
         .default_width(690)
@@ -196,50 +200,51 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
     window.set_destroy_with_parent(true);
     let content = column(8);
     content.add_css_class("content");
-    let heading = label("Akun dan folder", "title");
+    let heading = label(tr("Akun dan folder"), "title");
     heading.set_focusable(true);
     content.append(&heading);
     let intro = label(
-        "Hubungkan akun Google dan tentukan folder yang ingin Anda sinkronkan.",
+        tr("Hubungkan akun Google dan tentukan folder yang ingin Anda sinkronkan."),
         "subtitle",
     );
     intro.set_wrap(true);
     content.append(&intro);
     let account_card = card();
-    account_card.append(&label("AKUN GOOGLE", "eyebrow"));
+    account_card.append(&label(tr("AKUN GOOGLE"), "eyebrow"));
     let profiles_box = column(6);
-    let profiles_expander = gtk::Expander::new(Some("Akun tersimpan — pilih untuk melihat folder"));
+    let profiles_expander =
+        gtk::Expander::new(Some(tr("Akun tersimpan — pilih untuk melihat folder")));
     profiles_expander.set_child(Some(&profiles_box));
     profiles_expander.set_expanded(true);
     account_card.append(&profiles_expander);
     let login_row = flow();
-    let login = gtk::Button::with_label("Hubungkan akun baru…");
+    let login = gtk::Button::with_label(tr("Hubungkan akun baru…"));
     login.add_css_class("suggested-action");
-    let reauth = gtk::Button::with_label("Login ulang akun terpilih");
+    let reauth = gtk::Button::with_label(tr("Login ulang akun terpilih"));
     login_row.insert(&login, -1);
     login_row.insert(&reauth, -1);
     account_card.append(&login_row);
-    let account = label("Memeriksa akun tersimpan…", "detail");
+    let account = label(tr("Memeriksa akun tersimpan…"), "detail");
     account.set_selectable(true);
     account.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     account_card.append(&account);
-    let target = label("Belum ada pasangan folder tersimpan.", "subtitle");
+    let target = label(tr("Belum ada pasangan folder tersimpan."), "subtitle");
     target.set_wrap(true);
     account_card.append(&target);
     content.append(&account_card);
     let drive_card = card();
-    let scope=label("Pilih My Drive untuk menampilkan seluruh drive, atau subfolder untuk membatasi tampilan. Konten diunduh saat dibuka atau dipilih tersedia offline. Profil baru tetap terpisah dari profil aktif.","subtitle");
+    let scope=label(tr("Pilih My Drive untuk menampilkan seluruh drive, atau subfolder untuk membatasi tampilan. Konten diunduh saat dibuka atau dipilih tersedia offline. Profil baru tetap terpisah dari profil aktif."),"subtitle");
     scope.set_wrap(true);
-    drive_card.append(&label("1 · FOLDER GOOGLE DRIVE", "eyebrow"));
+    drive_card.append(&label(tr("1 · FOLDER GOOGLE DRIVE"), "eyebrow"));
     drive_card.append(&scope);
 
-    let breadcrumb = label("My Drive", "detail");
+    let breadcrumb = label(tr("My Drive"), "detail");
     breadcrumb.set_wrap(true);
     drive_card.append(&breadcrumb);
     let nav = flow();
-    let back = gtk::Button::with_label("Naik");
-    let reload = gtk::Button::with_label("Muat folder");
-    let next_button = gtk::Button::with_label("Halaman berikutnya");
+    let back = gtk::Button::with_label(tr("Naik"));
+    let reload = gtk::Button::with_label(tr("Muat folder"));
+    let next_button = gtk::Button::with_label(tr("Halaman berikutnya"));
     for b in [&back, &reload, &next_button] {
         nav.insert(b, -1);
     }
@@ -247,7 +252,10 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
     let folders = gtk::ListBox::new();
     folders.set_selection_mode(gtk::SelectionMode::None);
     folders.add_css_class("boxed-list");
-    folders.append(&label("Hubungkan akun untuk melihat folder.", "subtitle"));
+    folders.append(&label(
+        tr("Hubungkan akun untuk melihat folder."),
+        "subtitle",
+    ));
     let list_scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .min_content_height(90)
@@ -256,26 +264,26 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
         .child(&folders)
         .build();
     drive_card.append(&list_scroll);
-    let hint=label("Folder pada jalur di atas adalah pilihan sinkronisasi. Klik subfolder untuk masuk; My Drive berarti seluruh drive pribadi.","subtitle");
+    let hint=label(tr("Folder pada jalur di atas adalah pilihan sinkronisasi. Klik subfolder untuk masuk; My Drive berarti seluruh drive pribadi."),"subtitle");
     hint.set_wrap(true);
     drive_card.append(&hint);
     content.append(&drive_card);
     let local_card = card();
-    local_card.append(&label("2 · FOLDER LOKAL", "eyebrow"));
-    let local = label("Belum dipilih", "detail");
+    local_card.append(&label(tr("2 · FOLDER LOKAL"), "eyebrow"));
+    let local = label(tr("Belum dipilih"), "detail");
     local.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     local_card.append(&local);
-    let choose_button = gtk::Button::with_label("Pilih folder lokal kosong…");
+    let choose_button = gtk::Button::with_label(tr("Pilih folder lokal kosong…"));
     choose_button.set_halign(gtk::Align::Start);
     local_card.append(&choose_button);
     content.append(&local_card);
     let feedback = label(
-        "Profil baru tidak mengganti folder yang sedang tersinkron.",
+        tr("Profil baru tidak mengganti folder yang sedang tersinkron."),
         "subtitle",
     );
     feedback.set_wrap(true);
     content.append(&feedback);
-    let save = gtk::Button::with_label("Simpan dan buka dashboard profil");
+    let save = gtk::Button::with_label(tr("Simpan dan buka dashboard profil"));
     save.add_css_class("suggested-action");
     content.append(&save);
     let scroll = gtk::ScrolledWindow::builder()
@@ -286,7 +294,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
     let worker = match onboarding::spawn_observer(base, current, snapshot_mode) {
         Ok(w) => w,
         Err(_) => {
-            feedback.set_text("Pengaturan tidak dapat dimulai.");
+            feedback.set_text(tr("Pengaturan tidak dapat dimulai."));
             window.present();
             return window;
         }
@@ -300,7 +308,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
         target,
         saved: Cell::new(false),
         root: RefCell::new(None),
-        path: RefCell::new(vec![("root".into(), "My Drive".into())]),
+        path: RefCell::new(vec![("root".into(), tr("My Drive").into())]),
         next: RefCell::new(None),
         folders,
         breadcrumb,
@@ -317,7 +325,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
     {
         let weak = Rc::downgrade(&ui);
         let parent = window.downgrade();
-        ui.login.connect_clicked(move |_|{let (Some(ui),Some(parent))=(weak.upgrade(),parent.upgrade())else{return;};let weak=Rc::downgrade(&ui);choose(&parent,gtk::FileChooserAction::Open,move|client|{if let Some(ui)=weak.upgrade(){ui.send(Command::Login(client),"Selesaikan login dan persetujuan Google di browser. Menutup pengaturan membatalkan penantian (maksimum 15 menit).");}});});
+        ui.login.connect_clicked(move |_|{let (Some(ui),Some(parent))=(weak.upgrade(),parent.upgrade())else{return;};let weak=Rc::downgrade(&ui);choose(&parent,gtk::FileChooserAction::Open,move|client|{if let Some(ui)=weak.upgrade(){ui.send(Command::Login(client),tr("Selesaikan login dan persetujuan Google di browser. Menutup pengaturan membatalkan penantian (maksimum 15 menit)."));}});});
     }
     {
         let weak = Rc::downgrade(&ui);
@@ -325,7 +333,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
             if let Some(ui) = weak.upgrade() {
                 ui.send(
                     Command::Reauthenticate,
-                    "Selesaikan login ulang di browser dengan akun profil yang sama.",
+                    tr("Selesaikan login ulang di browser dengan akun profil yang sama."),
                 );
             }
         });
@@ -385,7 +393,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                 let folder = ui.path.borrow().last().expect("root").0.clone();
                 ui.send(
                     Command::Save { root, folder },
-                    "Memverifikasi folder dan menyimpan profil baru…",
+                    tr("Memverifikasi folder dan menyimpan profil baru…"),
                 );
             }
         });
@@ -411,18 +419,21 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                         profiles_box.remove(&child);
                     }
                     if accounts.is_empty() {
-                        profiles_box.append(&label("Belum ada akun tersimpan.", "subtitle"));
-                        ui.account.set_text("Hubungkan akun untuk memulai.");
+                        profiles_box.append(&label(tr("Belum ada akun tersimpan."), "subtitle"));
+                        ui.account.set_text(tr("Hubungkan akun untuk memulai."));
                     }
                     for a in accounts {
                         let email = a
                             .identity
                             .as_ref()
                             .map(|i| i.email.as_str())
-                            .unwrap_or("Akun tersimpan — email belum dimuat");
+                            .unwrap_or(tr("Akun tersimpan — email belum dimuat"));
                         let caption = match &a.config {
                             Some(c) => format!("{} · {}", email, c.root.display()),
-                            None => format!("{} · lanjutkan memilih folder", email),
+                            None => fmt(
+                                "{} · lanjutkan memilih folder",
+                                &[("0", (email).to_string())],
+                            ),
                         };
                         let button = gtk::Button::with_label(&caption);
                         button.set_tooltip_text(Some(&caption));
@@ -436,7 +447,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                             if let Some(ui) = weak.upgrade() {
                                 ui.send(
                                     Command::UseAccount(a.state.clone()),
-                                    "Memuat akun tersimpan…",
+                                    tr("Memuat akun tersimpan…"),
                                 );
                             }
                         });
@@ -455,19 +466,23 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                     ui.existing.set(config.is_some());
                     ui.account.set_text(
                         &identity
-                            .map(|i| format!("✓ Akun Google Drive: {}", i.email))
-                            .unwrap_or_else(|| "Akun tersimpan; email belum tersedia.".into()),
+                            .map(|i| {
+                                fmt("✓ Akun Google Drive: {}", &[("0", (i.email).to_string())])
+                            })
+                            .unwrap_or_else(|| tr("Akun tersimpan; email belum tersedia.").into()),
                     );
-                    *ui.path.borrow_mut() = vec![("root".into(), "My Drive".into())];
+                    *ui.path.borrow_mut() = vec![("root".into(), tr("My Drive").into())];
                     if let Some(c) = config {
                         let f = folder.unwrap_or(onboarding::Folder {
                             id: c.drive_folder.clone(),
                             name: c.drive_folder.clone(),
                         });
-                        ui.target.set_text(&format!(
+                        ui.target.set_text(&fmt(
                             "Target tersimpan: {}\nFolder lokal: {}",
-                            f.name,
-                            c.root.display()
+                            &[
+                                ("0", (f.name).to_string()),
+                                ("1", (c.root.display()).to_string()),
+                            ],
                         ));
                         if c.drive_folder != "root" {
                             ui.path.borrow_mut().push((f.id, f.name));
@@ -475,8 +490,8 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                         ui.local.set_text(&c.root.to_string_lossy());
                         *ui.root.borrow_mut() = Some(c.root);
                     } else {
-                        ui.target.set_text("Akun berhasil dicatat. Pilih target Drive dan folder lokal untuk menyelesaikan profil.");
-                        ui.local.set_text("Belum dipilih");
+                        ui.target.set_text(tr("Akun berhasil dicatat. Pilih target Drive dan folder lokal untuk menyelesaikan profil."));
+                        ui.local.set_text(tr("Belum dipilih"));
                         *ui.root.borrow_mut() = None;
                     }
                     if snapshot_mode {
@@ -484,7 +499,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                             ui.folders.remove(&child);
                         }
                         ui.folders.append(&label(
-                            "Pratinjau: daftar folder dimuat saat dialog interaktif dibuka.",
+                            tr("Pratinjau: daftar folder dimuat saat dialog interaktif dibuka."),
                             "subtitle",
                         ));
                         ui.update();
@@ -495,19 +510,19 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                 Ok(Event::Folders(page)) => {
                     ui.busy.set(false);
                     ui.fill(page);
-                    ui.feedback.set_text(if ui.existing.get() { "Akun sudah terhubung. Target tersimpan ditampilkan di atas; daftar ini dapat dijelajahi tanpa mengubah cakupan sinkronisasi." } else { "Pilih folder pada jalur di atas, kemudian pilih folder lokal kosong." });
+                    ui.feedback.set_text(if ui.existing.get() { tr("Akun sudah terhubung. Target tersimpan ditampilkan di atas; daftar ini dapat dijelajahi tanpa mengubah cakupan sinkronisasi.") } else { tr("Pilih folder pada jalur di atas, kemudian pilih folder lokal kosong.") });
                     ui.update();
                 }
                 Ok(Event::Saved(state)) => {
                     ui.busy.set(false);
                     ui.saved.set(true);
-                    ui.feedback.set_text(if open_profile(&state){"Profil tersimpan. Mulai service dari dashboard baru saat Anda siap."}else{"Profil tersimpan. Buka kembali melalui daftar profil untuk memulai service."});
+                    ui.feedback.set_text(if open_profile(&state){tr("Profil tersimpan. Mulai service dari dashboard baru saat Anda siap.")}else{tr("Profil tersimpan. Buka kembali melalui daftar profil untuk memulai service.")});
                     ui.update();
                 }
                 Ok(Event::LoginRequired) => {
                     ui.busy.set(false);
                     ui.logged.set(false);
-                    ui.feedback.set_text("Login Google diperlukan kembali. Gunakan Login ulang akun terpilih; akun tersimpan tidak dihapus.");
+                    ui.feedback.set_text(tr("Login Google diperlukan kembali. Gunakan Login ulang akun terpilih; akun tersimpan tidak dihapus."));
                     ui.update();
                 }
                 Ok(Event::Error(message)) => {

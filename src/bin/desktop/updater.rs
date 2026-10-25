@@ -1,4 +1,5 @@
 use gtk::{glib, prelude::*};
+use mygdrive_sync::i18n::{fmt, tr};
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, process::Command, sync::mpsc, time::Duration};
 
@@ -25,23 +26,44 @@ enum Request {
     Install(String),
 }
 
+fn status_message(status: &serde_json::Value) -> String {
+    let version = status["available_version"]
+        .as_str()
+        .or_else(|| status["current_version"].as_str())
+        .unwrap_or("—");
+    let key = match status["phase"].as_str() {
+        Some("checking") => "Memeriksa rilis GitHub…",
+        Some("current") => "Version {0} is up to date.",
+        Some("available") => "Version {0} is available. You choose when to update.",
+        Some("manual") => "Version {0} is available. Choose a package from the release page.",
+        Some("downloading") => "Downloading update {0}…",
+        Some("installing") => "Installing update {0}…",
+        Some("installed") => {
+            "Update installed. Reopen the application and service to use the new version."
+        }
+        Some("error") => "Update failed. Check the connection and permissions, then retry.",
+        _ => "Status pembaruan belum tersedia.",
+    };
+    fmt(key, &[("0", version.to_owned())])
+}
+
 /// Network, status files and package operations run outside the GTK main thread.
 /// The periodic path can only check; installation requires a button request.
 pub fn panel(snapshot_mode: bool) -> gtk::Box {
     let panel = super::card();
-    panel.append(&super::label("APLIKASI", "eyebrow"));
+    panel.append(&super::label(tr("APLIKASI"), "eyebrow"));
     panel.append(&super::label(
         &format!("MyGdrive Rust  ·  v{}", env!("CARGO_PKG_VERSION")),
         "detail",
     ));
-    let message = super::label("Memeriksa rilis GitHub…", "subtitle");
+    let message = super::label(tr("Memeriksa rilis GitHub…"), "subtitle");
     panel.append(&message);
     let actions = super::flow();
-    let check = gtk::Button::with_label("Periksa pembaruan");
-    let install = gtk::Button::with_label("Update sekarang");
+    let check = gtk::Button::with_label(tr("Periksa pembaruan"));
+    let install = gtk::Button::with_label(tr("Update sekarang"));
     install.add_css_class("suggested-action");
     install.set_visible(false);
-    let release = gtk::LinkButton::with_label(RELEASES, "Catatan rilis ↗");
+    let release = gtk::LinkButton::with_label(RELEASES, tr("Catatan rilis ↗"));
     actions.insert(&check, -1);
     actions.insert(&install, -1);
     if let Some(child) = install.parent() {
@@ -50,17 +72,19 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
     actions.insert(&release, -1);
     panel.append(&actions);
     panel.append(&super::label(
-        "Pemasangan dimulai hanya saat Anda memilih Update sekarang.",
+        tr("Pemasangan dimulai hanya saat Anda memilih Update sekarang."),
         "subtitle",
     ));
     if snapshot_mode {
-        message.set_text("Status rilis akan diperiksa saat aplikasi dibuka.");
+        message.set_text(tr("Status rilis akan diperiksa saat aplikasi dibuka."));
         check.set_sensitive(false);
         release.set_sensitive(false);
         return panel;
     }
     if std::env::var_os("MYGDRIVE_DISABLE_AUTO_UPDATE").is_some() {
-        message.set_text("Pemeriksaan pembaruan dinonaktifkan melalui pengaturan lingkungan.");
+        message.set_text(tr(
+            "Pemeriksaan pembaruan dinonaktifkan melalui pengaturan lingkungan.",
+        ));
         check.set_sensitive(false);
         return panel;
     }
@@ -111,13 +135,13 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
                         let done = match child.try_wait() {
                             Ok(Some(status)) => {
                                 if !status.success() {
-                                    failed = Some("Pemeriksaan gagal. Pastikan Python 3 tersedia.");
+                                    failed = Some(tr("Pemeriksaan gagal. Pastikan Python 3 tersedia."));
                                 }
                                 true
                             }
                             Ok(None) => false,
                             Err(_) => {
-                                failed = Some("Status proses pembaruan tidak dapat dibaca.");
+                                failed = Some(tr("Status proses pembaruan tidak dapat dibaca."));
                                 true
                             }
                         };
@@ -137,15 +161,15 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
                         std::thread::sleep(Duration::from_millis(500));
                     },
                     Err(_) => {
-                        failed = Some("Updater tidak dapat dimulai. Pastikan Python 3 tersedia.")
+                        failed = Some(tr("Updater tidak dapat dimulai. Pastikan Python 3 tersedia."))
                     }
                 }
                 if !reported && failed.is_none() {
-                    failed = Some("Status pembaruan belum tersedia. Tekan Periksa pembaruan untuk mencoba lagi.");
+                    failed = Some(tr("Status pembaruan belum tersedia. Tekan Periksa pembaruan untuk mencoba lagi."));
                 }
                 if let Some(error) = failed {
                     if events
-                        .send(serde_json::json!({"phase":"error", "message":error}))
+                        .send(serde_json::json!({"phase":"error", "message":error, "localized":true}))
                         .is_err()
                     {
                         return;
@@ -159,7 +183,9 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
             }
         });
     if worker.is_err() {
-        message.set_text("Worker pembaruan tidak dapat dimulai. Buka ulang aplikasi.");
+        message.set_text(tr(
+            "Worker pembaruan tidak dapat dimulai. Buka ulang aplikasi.",
+        ));
         return panel;
     }
     let selected = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
@@ -171,7 +197,7 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
         if commands.try_send(Request::Check).is_ok() {
             pending_check.set_sensitive(false);
             pending_install.set_sensitive(false);
-            feedback.set_text("Memeriksa rilis GitHub…");
+            feedback.set_text(tr("Memeriksa rilis GitHub…"));
         }
     });
     let manual = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -188,7 +214,7 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
             if requests.try_send(Request::Install(version.clone())).is_ok() {
                 button.set_sensitive(false);
                 pending_check.set_sensitive(false);
-                feedback.set_text("Menyiapkan pembaruan yang Anda pilih…");
+                feedback.set_text(tr("Menyiapkan pembaruan yang Anda pilih…"));
             }
         }
     });
@@ -198,15 +224,18 @@ pub fn panel(snapshot_mode: bool) -> gtk::Box {
             return glib::ControlFlow::Break;
         }
         while let Ok(status) = results.try_recv() {
-            message.set_text(
-                status["message"]
-                    .as_str()
-                    .unwrap_or("Status pembaruan belum tersedia."),
-            );
+            // Locally generated worker errors are already translated. Python status
+            // messages are diagnostics; phase and version drive the visible text.
+            if status["localized"].as_bool() == Some(true) {
+                message.set_text(status["message"].as_str().unwrap_or(""));
+            } else {
+                message.set_text(&status_message(&status));
+            }
+            message.set_tooltip_text(status["message"].as_str());
             let busy = status["busy"].as_bool().unwrap_or(false);
             let is_manual = status["phase"] == "manual";
             manual.set(is_manual);
-            install.set_tooltip_text(Some(if is_manual { "Buka rilis GitHub untuk memilih paket instalasi." } else { "Unduh, verifikasi, lalu pasang versi yang tersedia. Paket .deb meminta izin administrator." }));
+            install.set_tooltip_text(Some(if is_manual { tr("Buka rilis GitHub untuk memilih paket instalasi.") } else { tr("Unduh, verifikasi, lalu pasang versi yang tersedia. Paket .deb meminta izin administrator.") }));
             let available = status["phase"] == "available" || is_manual;
             *selected.borrow_mut() = status["available_version"]
                 .as_str()

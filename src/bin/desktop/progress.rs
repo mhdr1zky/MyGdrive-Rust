@@ -1,6 +1,7 @@
 use super::{card, column, flow, label, row};
 use gtk::{gio, prelude::*};
 use mygdrive_sync::dashboard::{ActivityItem, ActivityPage, Snapshot};
+use mygdrive_sync::i18n::{fmt, tr};
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
@@ -24,7 +25,7 @@ pub struct Popup {
 impl Popup {
     pub fn new(parent: &gtk::ApplicationWindow, snapshot_mode: bool) -> Self {
         let window = gtk::Window::builder()
-            .title("Aktivitas sinkronisasi · MyGdrive Rust")
+            .title(tr("Aktivitas sinkronisasi · MyGdrive Rust"))
             .default_width(560)
             .default_height(580)
             .resizable(true)
@@ -33,20 +34,20 @@ impl Popup {
         window.set_application(parent.application().as_ref());
         let content = column(12);
         content.add_css_class("content");
-        content.append(&label("TRANSFER & RIWAYAT", "eyebrow"));
-        content.append(&label("Aktivitas sinkronisasi", "title"));
+        content.append(&label(tr("TRANSFER & RIWAYAT"), "eyebrow"));
+        content.append(&label(tr("Aktivitas sinkronisasi"), "title"));
         let health = card();
         health.add_css_class("hero");
-        let status = label("Menunggu status layanan…", "detail");
+        let status = label(tr("Menunggu status layanan…"), "detail");
         status.set_wrap(true);
         health.append(&status);
-        let summary = label("Belum ada aktivitas.", "subtitle");
+        let summary = label(tr("Belum ada aktivitas."), "subtitle");
         summary.set_wrap(true);
         health.append(&summary);
         let bar = gtk::ProgressBar::new();
         health.append(&bar);
         content.append(&health);
-        content.append(&label("AKTIVITAS FILE TERBARU", "eyebrow"));
+        content.append(&label(tr("AKTIVITAS FILE TERBARU"), "eyebrow"));
         let list = column(8);
         let scroll = gtk::ScrolledWindow::builder()
             .min_content_height(120)
@@ -56,14 +57,14 @@ impl Popup {
             .build();
         content.append(&scroll);
         let buttons = flow();
-        let dashboard = gtk::Button::with_label("Buka dashboard");
+        let dashboard = gtk::Button::with_label(tr("Buka dashboard"));
         let weak = parent.downgrade();
         dashboard.connect_clicked(move |_| {
             if let Some(parent) = weak.upgrade() {
                 parent.present();
             }
         });
-        let close = gtk::Button::with_label("Tutup");
+        let close = gtk::Button::with_label(tr("Tutup"));
         let weak = window.downgrade();
         close.connect_clicked(move |_| {
             if let Some(window) = weak.upgrade() {
@@ -101,22 +102,24 @@ impl Popup {
         let message = if let Some(notice) = snapshot.notice() {
             notice.description()
         } else if snapshot.status.as_ref().is_some_and(|s| s.paused) {
-            "Sinkronisasi dijeda. Perubahan tetap tersimpan."
+            tr("Sinkronisasi dijeda. Perubahan tetap tersimpan.")
         } else if active {
-            "Sedang menyinkronkan perubahan file…"
+            tr("Sedang menyinkronkan perubahan file…")
         } else if self.retry_count.get() > 0 {
-            "Ada operasi tertunda; menunggu percobaan ulang otomatis."
+            tr("Ada operasi tertunda; menunggu percobaan ulang otomatis.")
         } else if self.pending_count.get() > 0 {
-            "Menunggu giliran sinkronisasi…"
+            tr("Menunggu giliran sinkronisasi…")
         } else {
-            "Tidak ada transfer yang sedang berjalan."
+            tr("Tidak ada transfer yang sedang berjalan.")
         };
         self.status.set_text(message);
-        self.summary.set_text(&format!(
+        self.summary.set_text(&fmt(
             "Menunggu: {} file  ·  Penghapusan: {}  ·  Dicoba ulang: {}",
-            self.pending_count.get(),
-            self.delete_count.get(),
-            self.retry_count.get()
+            &[
+                ("0", (self.pending_count.get()).to_string()),
+                ("1", (self.delete_count.get()).to_string()),
+                ("2", (self.retry_count.get()).to_string()),
+            ],
         ));
         self.bar.set_visible(active);
         if active {
@@ -143,7 +146,7 @@ impl Popup {
             }
             if items.is_empty() {
                 self.list.append(&label(
-                    "Belum ada aktivitas file. Riwayat akan muncul setelah file disinkronkan.",
+                    tr("Belum ada aktivitas file. Riwayat akan muncul setelah file disinkronkan."),
                     "notice",
                 ));
             }
@@ -158,11 +161,11 @@ impl Popup {
                 heading.append(&name);
                 let badge = label(
                     if item.retrying {
-                        "Dicoba ulang"
+                        tr("Dicoba ulang")
                     } else if item.pending {
-                        "Menunggu"
+                        tr("Menunggu")
                     } else {
-                        "Selesai"
+                        tr("Selesai")
                     },
                     "pill",
                 );
@@ -195,13 +198,13 @@ impl Popup {
         {
             self.last_notified.set(now);
             if let Some(app) = self.window.application() {
-                let notification = gio::Notification::new("MyGdrive Rust — sinkronisasi");
+                let notification = gio::Notification::new(tr("MyGdrive Rust — sinkronisasi"));
                 notification.set_body(Some(if page.pending_files == 0 {
-                    "Sinkronisasi file selesai."
+                    tr("Sinkronisasi file selesai.")
                 } else {
-                    "Perubahan Drive sedang diproses bertahap."
+                    tr("Perubahan Drive sedang diproses bertahap.")
                 }));
-                notification.add_button("Lihat detail", "app.progress");
+                notification.add_button(tr("Lihat detail"), "app.progress");
                 app.send_notification(Some("sync-progress"), &notification);
             }
         }

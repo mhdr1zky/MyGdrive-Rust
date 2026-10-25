@@ -33,6 +33,8 @@ work_dir=$(mktemp -d "${TMPDIR:-/tmp}/mygdrive-appimage.XXXXXXXX")
 trap 'rm -rf -- "$work_dir"' EXIT
 app_dir="$work_dir/MyGdrive.AppDir"
 install -d "$app_dir/usr/bin" "$app_dir/usr/share/applications" "$app_dir/usr/share/doc/mygdrive-rust"
+install -d "$app_dir/usr/share/mygdrive/locales"
+install -m644 assets/locales/*.json "$app_dir/usr/share/mygdrive/locales/"
 for binary in mygdrive-sync mygdrive-desktop mygdrive-mount; do
     install -m755 "$target_dir/release/$binary" "$app_dir/usr/bin/$binary"
 done
@@ -41,7 +43,7 @@ install -m644 packaging/appimage/mygdrive.desktop "$app_dir/mygdrive.desktop"
 install -m644 packaging/appimage/mygdrive.desktop "$app_dir/usr/share/applications/mygdrive.desktop"
 install -m644 assets/mygdrive.svg "$app_dir/mygdrive.svg"
 ln -s mygdrive.svg "$app_dir/.DirIcon"
-for document in README.md CHANGELOG.md OAUTH_SETUP.md LICENSE docs/PERFORMANCE.md docs/screenshots/*.png; do
+for document in README.md CHANGELOG.md OAUTH_SETUP.md LICENSE docs/PERFORMANCE.md docs/LOCALIZATION.md docs/screenshots/*.png; do
     install -Dm644 "$document" "$app_dir/usr/share/doc/mygdrive-rust/$document"
 done
 install -d "$app_dir/usr/share/metainfo"

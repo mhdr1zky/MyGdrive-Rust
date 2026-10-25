@@ -1,4 +1,5 @@
 //! Graphical setup backend. New pairs are isolated; setup never starts a sync cycle.
+use crate::i18n::{fmt, tr};
 use crate::{
     drive::AccessTokenProvider,
     oauth,
@@ -133,7 +134,8 @@ impl FolderBrowser {
             .await?;
         if m.mime != "application/vnd.google-apps.folder" || m.trashed || m.drive.is_some() {
             return Err(Error::Invalid(
-                "Pilih folder My Drive yang masih tersedia. Shared Drive belum didukung.".into(),
+                tr("Pilih folder My Drive yang masih tersedia. Shared Drive belum didukung.")
+                    .into(),
             ));
         }
         validate_id(&m.id)?;
@@ -216,24 +218,24 @@ pub fn save_pair(base: &Path, state: &Path, root: &Path, folder: &Folder) -> Res
         .custom_flags(libc::O_NOFOLLOW)
         .open(base.join("profiles.lock"))?;
     lock.try_lock_exclusive()
-        .map_err(|_| Error::Invalid("Pengaturan profil sedang dipakai. Coba lagi.".into()))?;
+        .map_err(|_| Error::Invalid(tr("Pengaturan profil sedang dipakai. Coba lagi.").into()))?;
     let root = root.canonicalize()?;
     if !root.is_dir() || root.starts_with(&base) || base.starts_with(&root) {
         return Err(Error::Invalid(
-            "Folder lokal harus terpisah dari penyimpanan aplikasi.".into(),
+            tr("Folder lokal harus terpisah dari penyimpanan aplikasi.").into(),
         ));
     }
     for p in profiles(&base)? {
         let other = p.config.root.canonicalize()?;
         if other.starts_with(&root) || root.starts_with(&other) {
             return Err(Error::Invalid(
-                "Folder lokal bertumpang tindih dengan profil tersimpan.".into(),
+                tr("Folder lokal bertumpang tindih dengan profil tersimpan.").into(),
             ));
         }
     }
     if fs::read_dir(&root)?.next().is_some() {
         return Err(Error::Invalid(
-            "Pilih folder lokal kosong untuk pasangan baru.".into(),
+            tr("Pilih folder lokal kosong untuk pasangan baru.").into(),
         ));
     }
     if fs::symlink_metadata(&state)?.uid() != unsafe { libc::geteuid() } {
@@ -358,7 +360,7 @@ async fn connected(state: &Path) -> Result<Event> {
         if c.drive_folder == "root" {
             Some(Folder {
                 id: "root".into(),
-                name: "My Drive (seluruh drive)".into(),
+                name: tr("My Drive (seluruh drive)").into(),
             })
         } else {
             let browser = FolderBrowser::new(Arc::new(oauth::OAuthProvider::new(token)?))?;
@@ -368,7 +370,10 @@ async fn connected(state: &Path) -> Result<Event> {
                     .await
                     .unwrap_or(Folder {
                         id: c.drive_folder.clone(),
-                        name: format!("Folder tersimpan ({})", c.drive_folder),
+                        name: fmt(
+                            "Folder tersimpan ({})",
+                            &[("0", (c.drive_folder).to_string())],
+                        ),
                     }),
             )
         }
@@ -407,7 +412,7 @@ async fn execute(base: &Path, state: &mut PathBuf, command: Command) -> Result<E
         Command::UseAccount(target) => {
             if !accounts(base)?.iter().any(|a| a.state == target) {
                 return Err(Error::Invalid(
-                    "Akun tidak ditemukan pada daftar profil.".into(),
+                    tr("Akun tidak ditemukan pada daftar profil.").into(),
                 ));
             }
             *state = target;
@@ -426,7 +431,7 @@ async fn execute(base: &Path, state: &mut PathBuf, command: Command) -> Result<E
         }
         Command::Save { root, folder } => {
             if registered(state)?.is_some() {
-                return Err(Error::Invalid("Profil ini sudah tersimpan. Hubungkan akun baru untuk membuat pasangan terpisah.".into()));
+                return Err(Error::Invalid(tr("Profil ini sudah tersimpan. Hubungkan akun baru untuk membuat pasangan terpisah.").into()));
             }
             let browser = FolderBrowser::new(Arc::new(oauth::OAuthProvider::new(
                 oauth::token_path(state, "default"),
@@ -442,7 +447,7 @@ fn safe_error(error: Error) -> Event {
         Error::AuthRequired => Event::LoginRequired,
         Error::Invalid(s) => Event::Error(s),
         _ => Event::Error(
-            "Operasi gagal. Periksa koneksi, file client OAuth, dan izin folder lalu coba lagi."
+            tr("Operasi gagal. Periksa koneksi, file client OAuth, dan izin folder lalu coba lagi.")
                 .into(),
         ),
     }
@@ -464,7 +469,7 @@ pub fn spawn_observer(base: PathBuf, current: PathBuf, read_only: bool) -> Resul
             {
                 Ok(runtime) => runtime,
                 Err(_) => {
-                    let _ = events.send(Event::Error("Worker pengaturan gagal dimulai.".into()));
+                    let _ = events.send(Event::Error(tr("Worker pengaturan gagal dimulai.").into()));
                     return;
                 }
             };
@@ -483,7 +488,7 @@ pub fn spawn_observer(base: PathBuf, current: PathBuf, read_only: bool) -> Resul
                         if read_only {
                             let config=registered(&current)?;
                             let identity=oauth::saved_identity(&oauth::token_path(&current,&account))?;
-                            let folder=config.as_ref().map(|c|Folder{id:c.drive_folder.clone(),name:if c.drive_folder=="root"{"My Drive (seluruh drive)".into()}else{c.drive_folder.clone()}});
+                            let folder=config.as_ref().map(|c|Folder{id:c.drive_folder.clone(),name:if c.drive_folder=="root"{tr("My Drive (seluruh drive)").into()}else{c.drive_folder.clone()}});
                             Ok(Event::Connected {identity,config,folder})
                         } else {connected(&current).await}
                     }=>result,

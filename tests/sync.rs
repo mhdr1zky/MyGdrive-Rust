@@ -2448,7 +2448,10 @@ async fn desktop_controller_controls_service_and_distinguishes_historical_status
     )
     .unwrap();
     let paused = dashboard_wait(&controller, |s| s.live).await;
-    assert_eq!(paused.title(), "Sinkronisasi dijeda");
+    assert_eq!(
+        paused.title(),
+        mygdrive_sync::i18n::tr("Sinkronisasi dijeda")
+    );
     assert_eq!(paused.configuration().unwrap().root, f.root);
     controller.commands.try_send(Command::Resume).unwrap();
     let active = dashboard_wait(&controller, |s| {
@@ -2457,7 +2460,7 @@ async fn desktop_controller_controls_service_and_distinguishes_historical_status
             .is_some_and(|s| s.cycles_finished >= 1 && !s.cycle_active)
     })
     .await;
-    assert_eq!(active.title(), "Semua tersinkron");
+    assert_eq!(active.title(), mygdrive_sync::i18n::tr("Semua tersinkron"));
     // Start while live must not spawn a writer even if supplied a nonexistent binary path.
     dashboard::perform(&state, std::path::Path::new("/nonexistent"), Command::Start)
         .await
@@ -2476,7 +2479,10 @@ async fn desktop_controller_controls_service_and_distinguishes_historical_status
     task.await.unwrap().unwrap();
     let historical = dashboard::read_snapshot(&state).await;
     assert!(!historical.live);
-    assert_eq!(historical.title(), "Service tidak aktif");
+    assert_eq!(
+        historical.title(),
+        mygdrive_sync::i18n::tr("Service tidak aktif")
+    );
     assert!(historical.status.unwrap().last_success_ms.is_some());
 }
 
@@ -2527,7 +2533,7 @@ async fn desktop_sync_now_downloads_remote_changes_without_waiting_for_poll_and_
     controller.commands.try_send(Command::SyncNow).unwrap();
     assert_eq!(
         completion(&controller).await.unwrap(),
-        "Sinkronisasi telah dijadwalkan."
+        mygdrive_sync::i18n::tr("Sinkronisasi telah dijadwalkan.")
     );
     let synced = dashboard_wait(&controller, |s| {
         s.status
@@ -2540,7 +2546,7 @@ async fn desktop_sync_now_downloads_remote_changes_without_waiting_for_poll_and_
         b"remote edit before manual sync"
     );
     assert!(f.drive.download_calls.load(Ordering::SeqCst) > downloads);
-    assert_eq!(synced.title(), "Semua tersinkron");
+    assert_eq!(synced.title(), mygdrive_sync::i18n::tr("Semua tersinkron"));
     let status = synced.status.unwrap();
     assert!(status.last_success_ms.is_some());
     assert!(status.last_report.unwrap().errors.is_empty());
@@ -5484,9 +5490,9 @@ async fn disconnected_download_keeps_original_and_retries_after_restart_with_act
     let items = mygdrive_sync::dashboard::read_activity(&f.state)
         .await
         .unwrap();
-    assert!(items
-        .iter()
-        .any(|i| i.path == "note.txt" && !i.pending && i.detail == "Selesai"));
+    assert!(items.iter().any(|i| i.path == "note.txt"
+        && !i.pending
+        && i.detail == mygdrive_sync::i18n::tr("Selesai")));
 }
 
 #[cfg(feature = "desktop-ui")]
@@ -5540,33 +5546,24 @@ async fn tray_health_distinguishes_lost_ui_connection_from_confirmed_sync_errors
     }
     let model = Model::from_snapshot(&snapshot, false);
     assert!(model.warning && !model.attention);
-    assert!(snapshot
-        .notice()
-        .unwrap()
-        .description()
-        .contains("dicoba ulang"));
+    assert_eq!(snapshot.notice(), Some(Notice::Offline));
+    assert!(!snapshot.notice().unwrap().description().is_empty());
     {
         let s = snapshot.status.as_mut().unwrap();
         s.connection = ConnectionState::AuthRequired;
         s.last_error = Some("auth_required".into());
     }
     assert!(Model::from_snapshot(&snapshot, false).attention);
-    assert!(snapshot
-        .notice()
-        .unwrap()
-        .description()
-        .contains("Login ulang"));
+    assert_eq!(snapshot.notice(), Some(Notice::AuthRequired));
+    assert!(!snapshot.notice().unwrap().description().is_empty());
     {
         let s = snapshot.status.as_mut().unwrap();
         s.connection = ConnectionState::Online;
         s.last_error = Some("file operation failed".into());
     }
     assert!(Model::from_snapshot(&snapshot, false).attention);
-    assert!(snapshot
-        .notice()
-        .unwrap()
-        .description()
-        .contains("Riwayat unggahan selesai"));
+    assert_eq!(snapshot.notice(), Some(Notice::Error));
+    assert!(!snapshot.notice().unwrap().description().is_empty());
     snapshot.status.as_mut().unwrap().last_error = None;
     let model = Model::from_snapshot(&snapshot, false);
     assert!(!model.attention && !model.warning && !model.syncing);
@@ -5798,10 +5795,9 @@ async fn file_permission_failure_does_not_block_other_pins_and_recovers_after_re
     let page = dashboard::read_activity_page(&fixture.state).await.unwrap();
     assert_eq!(page.pending_files, 1);
     assert_eq!(page.retry_operations, 1);
-    assert!(page
-        .items
-        .iter()
-        .any(|i| i.path == "a.txt" && i.retrying && i.detail.contains("Izin file ditolak")));
+    assert!(page.items.iter().any(|i| i.path == "a.txt"
+        && i.retrying
+        && i.detail == FileIssue::Permission.description()));
     let blocked = engine.db.by_remote("blocked").await.unwrap().unwrap();
     engine
         .set_available_offline(&blocked.id, false)
