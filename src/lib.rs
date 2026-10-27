@@ -1,4 +1,5 @@
 //! Linux offline-first Drive synchronisation. Remote mutations default to preserve-both.
+pub mod account_manager;
 mod activity;
 pub mod autostart;
 pub mod availability;
@@ -18,6 +19,7 @@ pub mod engine;
 pub mod i18n;
 mod keyed_lock;
 pub mod local;
+pub mod maintenance;
 mod memory;
 pub mod model;
 pub mod oauth;

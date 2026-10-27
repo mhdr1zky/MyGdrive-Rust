@@ -135,6 +135,10 @@ impl SyncEngine {
 
     pub async fn prune_cache(&self, max_bytes: u64) -> Result<crate::cache::EvictionReport> {
         let _guard = self.cycle.lock().await;
+        self.prune_cache_locked(max_bytes).await
+    }
+
+    async fn prune_cache_locked(&self, max_bytes: u64) -> Result<crate::cache::EvictionReport> {
         let _hydrations = self.hydration_lifecycle.write().await;
         self.recover_moves().await?;
         self.scanner.scan().await?;
@@ -437,6 +441,98 @@ impl SyncEngine {
         file.generation += 1;
         file.status = crate::db::status(&file);
         self.db.save_file(&file).await
+    }
+
+    /// Durable ACKs and optimistic file validation for desktop review decisions.
+    /// No filesystem hash or network operation runs inside the DB transaction.
+    pub async fn maintain(
+        &self,
+        request_id: &str,
+        command: &crate::maintenance::Request,
+    ) -> Result<(crate::maintenance::Outcome, bool)> {
+        use crate::maintenance::{Outcome, Request};
+        if uuid::Uuid::parse_str(request_id).is_err() {
+            return Err(Error::Changed);
+        }
+        let _cycle = self.cycle.lock().await;
+        if let Some(data) = sqlx::query_scalar::<_, String>(
+            "SELECT payload FROM offline_commands WHERE request_id=?",
+        )
+        .bind(request_id)
+        .fetch_optional(&self.db.pool)
+        .await?
+        {
+            let (old, outcome): (Request, Outcome) =
+                serde_json::from_str(&data).map_err(|_| Error::Changed)?;
+            if old != *command {
+                return Err(Error::Changed);
+            }
+            return Ok((outcome, true));
+        }
+        let outcome = match command {
+            Request::PruneCache { max_bytes } => {
+                let report = self.prune_cache_locked(*max_bytes).await?;
+                Outcome::CachePruned {
+                    removed_objects: report.removed_objects,
+                    reclaimed_bytes: report.before_bytes.saturating_sub(report.after_bytes),
+                    protected_bytes: report.protected_bytes,
+                }
+            }
+            Request::ApproveRecovery {
+                file_id,
+                generation,
+                sha256,
+            } => {
+                if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(Error::Changed);
+                }
+                let _file = self.files.lock(file_id).await;
+                self.recover_moves().await?;
+                self.scanner.scan().await?;
+                let _scanner = self.scanner.gate.lock().await;
+                self.verify_local_root().await?;
+                let mut file = self.db.file(file_id).await?;
+                if file.generation != *generation
+                    || !file.review_required
+                    || file.status != "recovery_review"
+                    || file
+                        .fingerprint
+                        .as_ref()
+                        .is_none_or(|fp| fp.digest.sha256 != *sha256)
+                    || !self.db.file_operations(file_id).await?.is_empty()
+                {
+                    return Err(Error::Changed);
+                }
+                let path = local::safe_path(&self.scanner.root, &file.relative_path)?;
+                let fingerprint = tokio::task::spawn_blocking(move || local::fingerprint(&path))
+                    .await
+                    .map_err(|_| Error::Changed)??;
+                if fingerprint.digest.sha256 != *sha256 {
+                    return Err(Error::Changed);
+                }
+                file.fingerprint = Some(fingerprint);
+                file.review_required = false;
+                file.generation += 1;
+                file.status = crate::db::status(&file);
+                let outcome = Outcome::RecoveryApproved;
+                // Keep the scanner gate until the file update and ACK commit together.
+                let mut tx = self.db.pool.begin().await?;
+                Database::write_file(&mut tx, &self.db.account, &file).await?;
+                sqlx::query("INSERT INTO offline_commands(request_id,payload) VALUES(?,?)")
+                    .bind(request_id)
+                    .bind(serde_json::to_string(&(command, &outcome))?)
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                return Ok((outcome, false));
+            }
+        };
+        sqlx::query("INSERT INTO offline_commands(request_id,payload) VALUES(?,?)")
+            .bind(request_id)
+            .bind(serde_json::to_string(&(command, &outcome))?)
+            .execute(&self.db.pool)
+            .await?;
+        Ok((outcome, false))
     }
     pub async fn open(
         root: &Path,

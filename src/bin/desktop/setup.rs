@@ -74,6 +74,7 @@ struct Ui {
     busy: Cell<bool>,
     logged: Cell<bool>,
     existing: Cell<bool>,
+    saved_client: Cell<bool>,
     account: gtk::Label,
     target: gtk::Label,
     saved: Cell<bool>,
@@ -176,6 +177,16 @@ impl Ui {
 }
 /// Returns the native setup window, also used by the application's render-only QA mode.
 pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bool) -> gtk::Window {
+    show_managed(parent, current, snapshot_mode, None, false)
+}
+
+pub fn show_managed(
+    parent: &gtk::ApplicationWindow,
+    current: PathBuf,
+    snapshot_mode: bool,
+    select: Option<super::accounts::Select>,
+    add_account: bool,
+) -> gtk::Window {
     let base = if current
         .parent()
         .and_then(|p| p.file_name())
@@ -304,6 +315,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
         busy: Cell::new(false),
         logged: Cell::new(false),
         existing: Cell::new(false),
+        saved_client: Cell::new(false),
         account,
         target,
         saved: Cell::new(false),
@@ -325,7 +337,11 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
     {
         let weak = Rc::downgrade(&ui);
         let parent = window.downgrade();
-        ui.login.connect_clicked(move |_|{let (Some(ui),Some(parent))=(weak.upgrade(),parent.upgrade())else{return;};let weak=Rc::downgrade(&ui);choose(&parent,gtk::FileChooserAction::Open,move|client|{if let Some(ui)=weak.upgrade(){ui.send(Command::Login(client),tr("Selesaikan login dan persetujuan Google di browser. Menutup pengaturan membatalkan penantian (maksimum 15 menit)."));}});});
+        ui.login.connect_clicked(move |_|{
+            let (Some(ui),Some(parent))=(weak.upgrade(),parent.upgrade())else{return;};
+            if ui.saved_client.get(){ui.send(Command::AddAccount,tr("Selesaikan login akun tambahan di browser."));return;}
+            let weak=Rc::downgrade(&ui);choose(&parent,gtk::FileChooserAction::Open,move|client|{if let Some(ui)=weak.upgrade(){ui.send(Command::Login(client),tr("Selesaikan login dan persetujuan Google di browser. Menutup pengaturan membatalkan penantian (maksimum 15 menit)."));}});
+        });
     }
     {
         let weak = Rc::downgrade(&ui);
@@ -407,6 +423,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
     });
     let for_destroy = ui.clone();
     window.connect_destroy(move |_| for_destroy.worker.stop());
+    let mut add_pending = add_account && !snapshot_mode;
     glib::timeout_add_local(Duration::from_millis(100), move || {
         if weak_window.upgrade().is_none() {
             ui.worker.stop();
@@ -414,6 +431,31 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
         }
         for _ in 0..8 {
             match ui.worker.events.try_recv() {
+                Ok(Event::SignedOut {
+                    identity,
+                    config,
+                    saved_client,
+                }) => {
+                    ui.busy.set(false);
+                    ui.logged.set(false);
+                    ui.saved_client.set(saved_client);
+                    ui.existing.set(config.is_some());
+                    ui.account.set_text(
+                        &identity
+                            .map(|identity| identity.email)
+                            .unwrap_or_else(|| tr("Akun terputus").into()),
+                    );
+                    if let Some(config) = config {
+                        ui.local.set_text(&config.root.to_string_lossy());
+                        *ui.root.borrow_mut() = Some(config.root);
+                    }
+                    ui.feedback.set_text(tr("Akun diputuskan dari perangkat ini. Gunakan Hubungkan kembali dengan akun Google yang sama."));
+                    ui.update();
+                    if add_pending {
+                        add_pending = false;
+                        ui.login.emit_clicked();
+                    }
+                }
                 Ok(Event::Accounts(accounts)) => {
                     while let Some(child) = profiles_box.first_child() {
                         profiles_box.remove(&child);
@@ -462,6 +504,7 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                 }) => {
                     ui.busy.set(false);
                     ui.logged.set(true);
+                    ui.saved_client.set(true);
                     ui.saved.set(false);
                     ui.existing.set(config.is_some());
                     ui.account.set_text(
@@ -494,7 +537,11 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                         ui.local.set_text(tr("Belum dipilih"));
                         *ui.root.borrow_mut() = None;
                     }
-                    if snapshot_mode {
+                    if add_pending {
+                        add_pending = false;
+                        ui.update();
+                        ui.login.emit_clicked();
+                    } else if snapshot_mode {
                         while let Some(child) = ui.folders.first_child() {
                             ui.folders.remove(&child);
                         }
@@ -516,6 +563,13 @@ pub fn show(parent: &gtk::ApplicationWindow, current: PathBuf, snapshot_mode: bo
                 Ok(Event::Saved(state)) => {
                     ui.busy.set(false);
                     ui.saved.set(true);
+                    if let Some(select) = &select {
+                        if let Some(window) = weak_window.upgrade() {
+                            window.close();
+                        }
+                        select(state);
+                        return glib::ControlFlow::Break;
+                    }
                     ui.feedback.set_text(if open_profile(&state){tr("Profil tersimpan. Mulai service dari dashboard baru saat Anda siap.")}else{tr("Profil tersimpan. Buka kembali melalui daftar profil untuk memulai service.")});
                     ui.update();
                 }

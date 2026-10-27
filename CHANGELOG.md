@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.1.0 — 28 October 2026
+
+- Manage multiple Google accounts from one desktop window: an avatar menu shows account identities, the selected account and independent sync status. Switching accounts keeps other account services running.
+- Add accounts using the saved OAuth application registration, without copying access tokens, refresh tokens or another account's user binding. Manage accounts in one panel with per-account pause/resume, reconnect and local disconnect.
+- Local disconnect drains the selected service before removing its login tokens and autostart entry. Local files, cloud files and other profiles remain intact. Retain the original Google user binding for safe reconnect to existing state.
+- Forward desktop launches and profile autostart requests to one application per account collection. Global quit drains every account; updating records and restores the running account set while preserving each account's pause state.
+- Keep read-only update checks from blocking account switches; installation still blocks switching until it finishes.
+- Add **Storage and recovery** to the dashboard, with allocated disk usage for local files, cache, upload snapshots, recovery copies and other profile data, plus free space on both volumes. Measurements use a background worker, skip symlinks, deduplicate hardlinks and report incomplete results. Refreshes are explicit instead of continuously scanning large accounts.
+- Show paginated file issues with privacy-safe explanations and actions to open their local folder or Drive page. Review recovered copies in the desktop; approval requires the displayed generation and content checksum, commits together with its durable request receipt, and respects pause. Replayed receipts cannot approve later edits. No recovery history is automatically deleted.
+- Add service-owned safe cache cleanup to the panel. Existing offline pins, local changes, active operations and recovery protections remain in force; clearing cache does not remove all local copies.
+- Route Thunar selections to their registered profile using local/mount paths, retaining earlier accounts and migrating fixed-profile menus. Validate the selection before dispatch, reject ambiguous/outside paths, serialize concurrent installations, protect registry metadata and update unpin descriptions.
+- Include English, Indonesian and Simplified Chinese messages. Add `--maintenance` and an isolated synthetic-data preview mode, alongside regression tests for review races/restarts, IPC sessions, disk accounting and multi-profile integration.
+
 ## v1.0.6 — 26 October 2026
 
 - Restart the desktop automatically after a verified packaged update. Drain active synchronization first, restore the previously running service and its paused state, and preserve profile, language, and window visibility. A detached helper waits for the old instance to exit before opening the new launcher; AppImage relaunch clears old mount-specific loader settings. Failed restarts remain retryable through **Restart now**.

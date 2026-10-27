@@ -151,7 +151,8 @@ pub fn panel(
     let (requests, receiver) = mpsc::sync_channel(1);
     let (events, results) = mpsc::channel::<serde_json::Value>();
     check.set_sensitive(false);
-    updating.set(true);
+    // Release checks are read-only and must not block account switching.
+    updating.set(false);
     let worker = std::thread::Builder::new()
         .name("github-updater".into())
         .spawn(move || {
@@ -198,6 +199,7 @@ pub fn panel(
                             {
                                 reported = true;
                                 status.insert("busy".into(), (!done).into());
+                                status.insert("installation_active".into(), matches!(&request, Some(Request::Install(_))).into());
                                 let ready = restart_ready(kind, &status, done && succeeded);
                                 status.insert("restart_ready".into(), ready.into());
                                 if events.send(serde_json::Value::Object(status)).is_err() {
@@ -244,10 +246,8 @@ pub fn panel(
     let pending_check = check.clone();
     let pending_install = install.clone();
     let feedback = message.clone();
-    let checking = updating.clone();
     check.connect_clicked(move |_| {
         if commands.try_send(Request::Check).is_ok() {
-            checking.set(true);
             pending_check.set_sensitive(false);
             pending_install.set_sensitive(false);
             feedback.set_text(tr("Memeriksa rilis GitHub…"));
@@ -289,7 +289,7 @@ pub fn panel(
             }
             message.set_tooltip_text(status["message"].as_str());
             let busy = status["busy"].as_bool().unwrap_or(false);
-            updating.set(busy);
+            updating.set(busy && status["installation_active"].as_bool().unwrap_or(false));
             let ready = status["restart_ready"].as_bool().unwrap_or(false);
             restart_button.set_visible(ready);
             if let Some(child) = restart_button.parent() {

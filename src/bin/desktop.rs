@@ -10,6 +10,10 @@ use std::{
     rc::Rc,
     time::Duration,
 };
+#[path = "desktop/accounts.rs"]
+mod accounts;
+#[path = "desktop/maintenance.rs"]
+mod maintenance;
 #[path = "desktop/offline.rs"]
 mod offline;
 #[path = "desktop/position.rs"]
@@ -31,7 +35,7 @@ struct RestartRequest {
     language: Option<String>,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(about = "MyGdrive Rust desktop dashboard")]
 struct Args {
     /// Interface language: auto (system), en, id, zh, or a custom catalog code.
@@ -57,8 +61,26 @@ struct Args {
     /// Open the compact tray activity window.
     #[arg(long)]
     progress: bool,
+    /// Open storage usage, file issues and recovery review.
+    #[arg(long)]
+    maintenance: bool,
+    /// Open the unified account manager.
+    #[arg(long)]
+    accounts: bool,
+    #[arg(long, hide = true)]
+    restore_accounts: bool,
 }
 const CSS: &str = r#"
+.account-menu { padding: 4px 10px; }
+.account-popover { padding: 10px; }
+.account-choice { padding: 10px; border-color: transparent; }
+.selected-account { background: #eaf1ff; border-color: #c6d9ff; }
+.account-avatar { min-width: 38px; min-height: 38px; border-radius: 22px; font-size: 16px; font-weight: 700; background: #dce8ff; color: #245bc4; }
+.avatar-1 { background: #e5e0fa; color: #6942b5; }
+.avatar-2 { background: #d8f2e7; color: #18764b; }
+.avatar-3 { background: #ffe7d2; color: #9c5914; }
+.avatar-4 { background: #fce0e7; color: #a5375b; }
+.account-check { color: #3067da; font-weight: 800; }
 window { background: #f5f7fb; color: #19263c; font-family: Sans; }
 .topbar { background: #ffffff; border-bottom: 1px solid #e2e8f0; padding: 16px 24px; }
 .brand { font-size: 21px; font-weight: 800; color: #245bc4; }
@@ -298,23 +320,41 @@ fn launch_uri(uri: &str, feedback: &gtk::Label) {
         ));
     }
 }
-fn build(
-    app: &gtk::Application,
+#[derive(Clone)]
+struct BuildRequest {
     state: PathBuf,
     snapshot_path: Option<PathBuf>,
-    dialogs: (bool, bool, bool),
+    dialogs: (bool, bool, bool, bool, bool),
     background: bool,
     start_service: bool,
     language: String,
-) {
-    if let Some(window) = app
-        .active_window()
-        .or_else(|| app.windows().into_iter().next())
-    {
-        window.present();
-        return;
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct OpenProfile {
+    state: PathBuf,
+    dialogs: (bool, bool, bool, bool, bool),
+}
+#[derive(Default)]
+struct PageLifecycle {
+    timer: Option<glib::SourceId>,
+    close: Option<glib::SignalHandlerId>,
+}
+fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::ApplicationWindow>) {
+    if reuse.is_none() {
+        if let Some(window) = app.active_window() {
+            window.present();
+            return;
+        }
     }
-    let (show_setup, show_offline, show_progress) = dialogs;
+    let BuildRequest {
+        state,
+        snapshot_path,
+        dialogs,
+        background,
+        start_service,
+        language,
+    } = request;
+    let (show_setup, show_offline, show_progress, show_maintenance, show_accounts) = dialogs;
     let snapshot_mode = snapshot_path.is_some();
     let tray_state = state.canonicalize().unwrap_or_else(|_| state.clone());
     let setup_state = state.clone();
@@ -326,7 +366,7 @@ fn build(
         None => return,
     };
     let relaunch = restart::Launcher::capture(&tray_state, &binary).ok();
-    let controller = match dashboard::spawn_observer(state, binary, !snapshot_mode) {
+    let controller = match dashboard::spawn_observer(state, binary.clone(), !snapshot_mode) {
         Ok(c) => Rc::new(c),
         Err(_) => return,
     };
@@ -339,12 +379,15 @@ fn build(
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
-    let window = gtk::ApplicationWindow::builder()
-        .application(app)
-        .title("MyGdrive Rust")
-        .default_width(1080)
-        .default_height(790)
-        .build();
+    let window = reuse.unwrap_or_else(|| {
+        gtk::ApplicationWindow::builder()
+            .application(app)
+            .title("MyGdrive Rust")
+            .default_width(1080)
+            .default_height(790)
+            .build()
+    });
+    let lifecycle = Rc::new(RefCell::new(PageLifecycle::default()));
     let shell = column(0);
     let navigation = column(12);
     navigation.add_css_class("topbar");
@@ -370,6 +413,8 @@ fn build(
     nav.insert(&settings, -1);
     let offline_button = gtk::Button::with_label(tr("Tersedia offline"));
     nav.insert(&offline_button, -1);
+    let maintenance_button = gtk::Button::with_label(tr("Penyimpanan dan pemulihan"));
+    nav.insert(&maintenance_button, -1);
     navigation.append(&nav);
     shell.append(&navigation);
     let content = column(12);
@@ -503,18 +548,18 @@ fn build(
     {
         let weak = window.downgrade();
         let state = setup_state.clone();
-        offline_button.connect_clicked(move |_| {
+        maintenance_button.connect_clicked(move |_| {
             if let Some(parent) = weak.upgrade() {
-                offline::show(&parent, state.clone(), snapshot_mode);
+                maintenance::show(&parent, state.clone(), snapshot_mode);
             }
         });
     }
     {
         let weak = window.downgrade();
         let state = setup_state.clone();
-        settings.connect_clicked(move |_| {
+        offline_button.connect_clicked(move |_| {
             if let Some(parent) = weak.upgrade() {
-                setup::show(&parent, state.clone(), snapshot_mode);
+                offline::show(&parent, state.clone(), snapshot_mode);
             }
         });
     }
@@ -697,6 +742,121 @@ fn build(
             }
         });
     }
+    let switch_app = app.downgrade();
+    let switch_window = window.downgrade();
+    let switch_controller = controller.clone();
+    let switch_tray = tray.clone();
+    let switch_progress = progress.window.downgrade();
+    let switch_lifecycle = lifecycle.clone();
+    let switch_busy = busy.clone();
+    let switch_updating = updating.clone();
+    let switch_feedback = feedback.clone();
+    let switch_language = language.clone();
+    let pending_view = Rc::new(RefCell::new(None::<OpenProfile>));
+    let selected_view = pending_view.clone();
+    let selected: accounts::Select = Rc::new(move |state| {
+        if switch_busy.get() || switch_updating.get() {
+            switch_feedback.set_text(tr("Tunggu perintah akun selesai sebelum berpindah."));
+            return false;
+        }
+        let (Some(app), Some(window)) = (switch_app.upgrade(), switch_window.upgrade()) else {
+            return false;
+        };
+        switch_controller.stop();
+        if let Some(tray) = &switch_tray {
+            tray.stop();
+        }
+        if let Some(progress) = switch_progress.upgrade() {
+            progress.destroy();
+        }
+        let mut lifecycle = switch_lifecycle.borrow_mut();
+        if let Some(timer) = lifecycle.timer.take() {
+            timer.remove();
+        }
+        if let Some(handler) = lifecycle.close.take() {
+            window.disconnect(handler);
+        }
+        drop(lifecycle);
+        for child in app.windows() {
+            if child != window.clone().upcast::<gtk::Window>() {
+                child.destroy();
+            }
+        }
+        for name in [
+            "accounts",
+            "select-account",
+            "open-profile",
+            "progress",
+            "hide-progress",
+        ] {
+            app.remove_action(name);
+        }
+        build(
+            &app,
+            BuildRequest {
+                dialogs: selected_view
+                    .borrow_mut()
+                    .take()
+                    .filter(|view| view.state == state)
+                    .map(|view| view.dialogs)
+                    .unwrap_or_default(),
+                state,
+                snapshot_path: None,
+                background: false,
+                start_service: false,
+                language: switch_language.clone(),
+            },
+            Some(window),
+        );
+        true
+    });
+    let account_switcher = accounts::Switcher::new(
+        &window,
+        tray_state.clone(),
+        binary.clone(),
+        snapshot_mode,
+        selected,
+    )
+    .ok()
+    .map(Rc::new);
+    if let Some(switcher) = &account_switcher {
+        let header = row();
+        header.set_hexpand(true);
+        brand.set_hexpand(true);
+        navigation.remove(&brand);
+        header.append(&brand);
+        header.append(&switcher.button);
+        navigation.prepend(&header);
+        let action = gio::SimpleAction::new("select-account", Some(glib::VariantTy::STRING));
+        let switcher = switcher.clone();
+        action.connect_activate(move |_, parameter| {
+            if let Some(state) = parameter.and_then(|v| v.get::<String>()) {
+                switcher.select(PathBuf::from(state));
+            }
+        });
+        app.add_action(&action);
+        let action = gio::SimpleAction::new("open-profile", Some(glib::VariantTy::STRING));
+        let switcher = account_switcher.as_ref().unwrap().clone();
+        action.connect_activate(move |_, parameter| {
+            if let Some(view) = parameter
+                .and_then(|v| v.get::<String>())
+                .and_then(|text| serde_json::from_str::<OpenProfile>(&text).ok())
+            {
+                let state = view.state.clone();
+                *pending_view.borrow_mut() = Some(view);
+                if !switcher.select(state) {
+                    pending_view.borrow_mut().take();
+                }
+            }
+        });
+        app.add_action(&action);
+        let action = gio::SimpleAction::new("accounts", None);
+        let switcher = account_switcher.as_ref().unwrap().clone();
+        action.connect_activate(move |_, _| switcher.manage());
+        app.add_action(&action);
+        let switcher = account_switcher.as_ref().unwrap().clone();
+        settings.connect_clicked(move |_| switcher.manage());
+    }
     let restart_in_progress = Rc::new(Cell::new(false));
     let restart_for_close = restart_in_progress.clone();
     let mut restart_plan = None::<restart::Plan>;
@@ -718,7 +878,13 @@ fn build(
         busy.set(true);
         feedback.set_text(tr("Memulai service dari konfigurasi tersimpan…"));
     }
-    glib::timeout_add_local(Duration::from_millis(100), move || {
+    let page_accounts = account_switcher.clone();
+    let page_timer = glib::timeout_add_local(Duration::from_millis(100), move || {
+        if let Some(accounts) = &page_accounts {
+            accounts
+                .button
+                .set_sensitive(!busy.get() && !updating.get());
+        }
         let Some(window) = weak.upgrade() else {
             if let Some(tray) = &tray {
                 tray.stop();
@@ -791,7 +957,7 @@ fn build(
                     Ok(plan) if update => {
                         if controller
                             .commands
-                            .try_send(Command::RestartAfterUpdate)
+                            .try_send(Command::RestartCollectionAfterUpdate)
                             .is_ok()
                         {
                             restart_plan = Some(plan);
@@ -826,7 +992,7 @@ fn build(
             && !busy.get()
             && controller
                 .commands
-                .try_send(Command::ShutdownAndWait)
+                .try_send(Command::ShutdownCollectionAndWait)
                 .is_ok()
         {
             quit_requested.set(false);
@@ -914,7 +1080,8 @@ fn build(
                 }
                 Ok(Event::RestartReady { start_service }) => {
                     if let Some(mut plan) = restart_plan.take() {
-                        plan.start_service = start_service;
+                        plan.start_service = false;
+                        plan.restore_accounts = true;
                         if plan.spawn_after_exit().is_err() {
                             restart_in_progress.set(false);
                             busy.set(false);
@@ -961,10 +1128,24 @@ fn build(
         }
         glib::ControlFlow::Continue
     });
-    if !background || snapshot_mode || show_setup || show_offline {
+    lifecycle.borrow_mut().timer = Some(page_timer);
+    if !background
+        || snapshot_mode
+        || show_setup
+        || show_offline
+        || show_maintenance
+        || show_accounts
+    {
         window.present();
     }
-    let render_window: gtk::Window = if show_progress {
+    let render_window: gtk::Window = if show_accounts {
+        account_switcher
+            .as_ref()
+            .and_then(|switcher| switcher.manager_window())
+            .unwrap_or_else(|| window.clone().upcast())
+    } else if show_maintenance {
+        maintenance::show(&window, setup_state, snapshot_mode)
+    } else if show_progress {
         progress_for_open.present(None);
         progress_render
     } else if show_offline {
@@ -995,7 +1176,7 @@ fn build(
         });
     }
     let close_controller = controller_for_close;
-    window.connect_close_request(move |window| {
+    let close_handler = window.connect_close_request(move |window| {
         if restart_for_close.get() {
             return glib::Propagation::Stop;
         }
@@ -1009,6 +1190,35 @@ fn build(
         }
         glib::Propagation::Proceed
     });
+    lifecycle.borrow_mut().close = Some(close_handler);
+}
+fn default_state() -> PathBuf {
+    directories::BaseDirs::new()
+        .expect("user data directory")
+        .data_local_dir()
+        .join("mygdrive")
+}
+
+fn absolute_state(state: PathBuf) -> PathBuf {
+    state
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::absolute(&state).unwrap_or(state))
+}
+fn request_for(args: &Args, state: PathBuf, language: &str) -> BuildRequest {
+    BuildRequest {
+        state,
+        snapshot_path: args.snapshot.clone(),
+        dialogs: (
+            args.setup,
+            args.offline,
+            args.progress,
+            args.maintenance,
+            args.accounts,
+        ),
+        background: args.background,
+        start_service: args.start_service && !args.restore_accounts,
+        language: language.to_owned(),
+    }
 }
 fn main() -> glib::ExitCode {
     let args = Args::parse();
@@ -1021,43 +1231,244 @@ fn main() -> glib::ExitCode {
         })
         .unwrap_or_else(|| "auto".into());
     mygdrive_sync::i18n::initialize(Some(&language));
-    let state = args.state.unwrap_or_else(|| {
-        directories::BaseDirs::new()
-            .expect("user data directory")
-            .data_local_dir()
-            .join("mygdrive")
-    });
-    let identity_state = state.canonicalize().unwrap_or_else(|_| {
-        if state.is_absolute() {
-            state.clone()
-        } else {
-            std::env::current_dir()
-                .expect("current directory")
-                .join(&state)
-        }
-    });
+    let state = absolute_state(args.state.clone().unwrap_or_else(default_state));
+    let collection = absolute_state(mygdrive_sync::account_manager::base_for(&state));
     let id = format!(
-        "io.mygdrive.Profile{}",
-        mygdrive_sync::autostart::profile_id(&identity_state)
+        "io.mygdrive.Accounts{}",
+        mygdrive_sync::autostart::profile_id(&collection)
     );
-    let app = gtk::Application::builder()
-        .application_id(&id)
-        .flags(if args.snapshot.is_some() {
+    let flags = gio::ApplicationFlags::HANDLES_COMMAND_LINE
+        | if args.snapshot.is_some() {
             gio::ApplicationFlags::NON_UNIQUE
         } else {
             gio::ApplicationFlags::empty()
-        })
+        };
+    let app = gtk::Application::builder()
+        .application_id(&id)
+        .flags(flags)
         .build();
-    app.connect_activate(move |app| {
-        build(
-            app,
-            state.clone(),
-            args.snapshot.clone(),
-            (args.setup, args.offline, args.progress),
-            args.background,
-            args.start_service,
-            language.clone(),
-        )
+    let initial = request_for(&args, state, &language);
+    let activate = initial.clone();
+    app.connect_activate(move |app| build(app, activate.clone(), None));
+    app.connect_command_line(move |app, command_line| {
+        let incoming = match Args::try_parse_from(command_line.arguments()) {
+            Ok(args) => args,
+            Err(_) => return glib::ExitCode::FAILURE,
+        };
+        let state = incoming.state.clone().unwrap_or_else(default_state);
+        let state = absolute_state(if state.is_absolute() {
+            state
+        } else {
+            command_line
+                .cwd()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+                .join(state)
+        });
+        if absolute_state(mygdrive_sync::account_manager::base_for(&state)) != collection {
+            return glib::ExitCode::FAILURE;
+        }
+        if incoming.restore_accounts {
+            let base = collection.clone();
+            let binary = std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(|path| path.join("mygdrive-sync")));
+            if let Some(binary) = binary {
+                std::thread::spawn(move || {
+                    if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        let _ = runtime.block_on(
+                            mygdrive_sync::account_manager::restore_collection(&base, &binary),
+                        );
+                    }
+                });
+            }
+        }
+        if app.windows().is_empty() {
+            build(app, request_for(&incoming, state, &language), None);
+        } else {
+            if incoming.start_service && !incoming.restore_accounts {
+                let base = collection.clone();
+                let state = state.clone();
+                let binary = std::env::current_exe()
+                    .ok()
+                    .and_then(|path| path.parent().map(|path| path.join("mygdrive-sync")));
+                if let Some(binary) = binary {
+                    std::thread::spawn(move || {
+                        if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            let _ = runtime.block_on(mygdrive_sync::account_manager::control(
+                                &base,
+                                &state,
+                                &binary,
+                                Command::Start,
+                            ));
+                        }
+                    });
+                }
+            }
+            if !incoming.background {
+                let view = OpenProfile {
+                    state,
+                    dialogs: (
+                        incoming.setup,
+                        incoming.offline,
+                        incoming.progress,
+                        incoming.maintenance,
+                        incoming.accounts,
+                    ),
+                };
+                if let Ok(view) = serde_json::to_string(&view) {
+                    app.activate_action("open-profile", Some(&view.to_variant()));
+                }
+                if let Some(window) = app
+                    .windows()
+                    .into_iter()
+                    .find(|window| window.is::<gtk::ApplicationWindow>())
+                {
+                    window.present();
+                }
+            }
+        }
+        glib::ExitCode::SUCCESS
     });
-    app.run_with_args(&["mygdrive-desktop"])
+    app.run_with_args(&std::env::args().collect::<Vec<_>>())
+}
+
+#[cfg(test)]
+mod account_ui_tests {
+    use super::*;
+    use std::{fs, os::unix::fs::PermissionsExt, time::Instant};
+
+    fn pump_until(predicate: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let context = glib::MainContext::default();
+        while !predicate() {
+            while context.pending() {
+                context.iteration(false);
+            }
+            assert!(Instant::now() < deadline, "account UI did not converge");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    fn has_label(widget: &gtk::Widget, text: &str) -> bool {
+        if widget
+            .downcast_ref::<gtk::Label>()
+            .is_some_and(|label| label.text() == text)
+        {
+            return true;
+        }
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            if has_label(&widget, text) {
+                return true;
+            }
+            child = widget.next_sibling();
+        }
+        false
+    }
+    #[test]
+    #[ignore = "requires a dedicated GTK display; use capture-previews.py --ui-test-binary"]
+    fn switching_accounts_reuses_window_and_replaces_profile_observers() {
+        let temp = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", temp.path().join("config"));
+        std::env::set_var("XDG_DATA_HOME", temp.path().join("data"));
+        gtk::init().unwrap();
+        let base = temp.path().join("collection");
+        let mut states = Vec::new();
+        for name in ["personal", "work"] {
+            let state = base.join("profiles").join(name);
+            let root = temp.path().join(name);
+            fs::create_dir_all(&state).unwrap();
+            fs::create_dir_all(&root).unwrap();
+            fs::write(
+                mygdrive_sync::service::config_path(&state),
+                serde_json::to_vec(&mygdrive_sync::service::ServiceConfig {
+                    version: 1,
+                    account: "default".into(),
+                    root,
+                    drive_folder: "root".into(),
+                    interval_seconds: 30,
+                    cache_max_bytes: None,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            let token = mygdrive_sync::oauth::token_path(&state, "default");
+            fs::create_dir_all(token.parent().unwrap()).unwrap();
+            fs::write(&token,serde_json::to_vec(&serde_json::json!({"client":{"client_id":"demo.apps.googleusercontent.com","client_secret":"synthetic"},"access_token":"synthetic","refresh_token":"synthetic","expires_at_ms":i64::MAX,"scope":mygdrive_sync::oauth::DRIVE_SCOPE,"drive_user_id":name,"identity":{"email":format!("{name}@example.test"),"display_name":name}})).unwrap()).unwrap();
+            fs::set_permissions(token, fs::Permissions::from_mode(0o600)).unwrap();
+            states.push(state);
+        }
+        let app = gtk::Application::builder()
+            .application_id("io.mygdrive.AccountUiTest")
+            .flags(gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        build(
+            &app,
+            BuildRequest {
+                state: states[0].clone(),
+                snapshot_path: None,
+                dialogs: (false, false, false, false, false),
+                background: false,
+                start_service: false,
+                language: "en".into(),
+            },
+            None,
+        );
+        let window = app
+            .windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<gtk::ApplicationWindow>().ok())
+            .unwrap();
+        pump_until(|| has_label(window.upcast_ref(), "personal@example.test"));
+        for index in [1, 0, 1] {
+            let old = window.child().unwrap();
+            app.activate_action(
+                "select-account",
+                Some(&states[index].to_string_lossy().to_string().to_variant()),
+            );
+            pump_until(|| window.child().is_some_and(|child| child != old));
+            pump_until(|| {
+                has_label(
+                    window.upcast_ref(),
+                    if index == 0 {
+                        "personal@example.test"
+                    } else {
+                        "work@example.test"
+                    },
+                )
+            });
+            assert_eq!(
+                app.windows()
+                    .iter()
+                    .filter(|window| window.is::<gtk::ApplicationWindow>())
+                    .count(),
+                1
+            );
+            assert!(app.windows().contains(&window.clone().upcast()));
+        }
+        let old = window.child().unwrap();
+        let view = serde_json::to_string(&OpenProfile {
+            state: states[0].clone(),
+            dialogs: (false, false, false, false, true),
+        })
+        .unwrap();
+        app.activate_action("open-profile", Some(&view.to_variant()));
+        pump_until(|| window.child().is_some_and(|child| child != old));
+        pump_until(|| has_label(window.upcast_ref(), "personal@example.test"));
+        pump_until(|| {
+            app.windows()
+                .iter()
+                .any(|window| window.title().as_deref() == Some(tr("Kelola akun · MyGdrive Rust")))
+        });
+        for window in app.windows() {
+            window.destroy();
+        }
+        app.quit();
+    }
 }

@@ -293,7 +293,9 @@ pub fn accounts(base: &Path) -> Result<Vec<Account>> {
             .as_ref()
             .map(|c| c.account.as_str())
             .unwrap_or("default");
-        if let Ok(identity) = oauth::saved_identity(&oauth::token_path(&state, label)) {
+        let token = oauth::token_path(&state, label);
+        if oauth::saved_identity(&token).is_ok() || config.is_some() {
+            let identity = oauth::registered_identity(&token);
             accounts.push(Account {
                 state,
                 identity,
@@ -305,6 +307,7 @@ pub fn accounts(base: &Path) -> Result<Vec<Account>> {
 }
 pub enum Command {
     Login(PathBuf),
+    AddAccount,
     Reauthenticate,
     UseAccount(PathBuf),
     Browse {
@@ -317,6 +320,11 @@ pub enum Command {
     },
 }
 pub enum Event {
+    SignedOut {
+        identity: Option<oauth::AccountIdentity>,
+        config: Option<ServiceConfig>,
+        saved_client: bool,
+    },
     Connected {
         identity: Option<oauth::AccountIdentity>,
         config: Option<ServiceConfig>,
@@ -352,6 +360,13 @@ async fn connected(state: &Path) -> Result<Event> {
         .map(|c| c.account.as_str())
         .unwrap_or("default");
     let token = oauth::token_path(state, account);
+    if matches!(oauth::saved_identity(&token), Err(Error::AuthRequired)) {
+        return Ok(Event::SignedOut {
+            identity: oauth::registered_identity(&token),
+            config,
+            saved_client: oauth::has_saved_client(&token),
+        });
+    }
     let mut identity = oauth::saved_identity(&token)?;
     if identity.is_none() {
         identity = Some(oauth::refresh_identity(&token).await?);
@@ -388,6 +403,28 @@ async fn connected(state: &Path) -> Result<Event> {
 }
 async fn execute(base: &Path, state: &mut PathBuf, command: Command) -> Result<Event> {
     match command {
+        Command::AddAccount => {
+            let account = registered(state)?
+                .map(|config| config.account)
+                .unwrap_or_else(|| "default".into());
+            let source = oauth::token_path(state, &account);
+            let draft = base.join("profiles").join(uuid::Uuid::new_v4().to_string());
+            crate::local::private_dir(base)?;
+            crate::local::private_dir(&base.join("profiles"))?;
+            crate::local::private_dir(&draft)?;
+            let target = oauth::token_path(&draft, "default");
+            let result = async {
+                oauth::prepare_new_account(&source, &target)?;
+                oauth::login_desktop(None, &target).await
+            }
+            .await;
+            if let Err(error) = result {
+                let _ = fs::remove_dir_all(&draft);
+                return Err(error);
+            }
+            *state = draft;
+            connected(state).await
+        }
         Command::Login(client) => {
             let draft = base.join("profiles").join(uuid::Uuid::new_v4().to_string());
             crate::local::private_dir(base)?;
@@ -494,6 +531,12 @@ pub fn spawn_observer(base: PathBuf, current: PathBuf, read_only: bool) -> Resul
                     }=>result,
                     };
                     let _ = events.send(initial.unwrap_or_else(safe_error));
+                } else if registered(&current).ok().flatten().is_some() {
+                    let _ = events.send(Event::SignedOut {
+                        identity: oauth::registered_identity(&oauth::token_path(&current, &account)),
+                        config: registered(&current).ok().flatten(),
+                        saved_client: oauth::has_saved_client(&oauth::token_path(&current, &account)),
+                    });
                 }
                 loop {
                     let command = tokio::select! {

@@ -67,6 +67,81 @@ struct StoredToken {
     #[serde(default)]
     identity: Option<AccountIdentity>,
 }
+/// Application registration and account binding retained after local sign-out.
+/// This deliberately contains no access or refresh token.
+#[derive(Deserialize, Serialize)]
+struct Registration {
+    client: DesktopClient,
+    drive_user_id: Option<String>,
+    identity: Option<AccountIdentity>,
+}
+
+fn registration_path(path: &Path) -> PathBuf {
+    path.with_extension("client.json")
+}
+
+pub fn registered_identity(path: &Path) -> Option<AccountIdentity> {
+    match read_token(path) {
+        Ok(token) => token.identity,
+        Err(Error::AuthRequired) => read_private::<Registration>(&registration_path(path))
+            .ok()
+            .and_then(|r| r.identity),
+        Err(_) => None,
+    }
+}
+
+pub fn has_saved_client(path: &Path) -> bool {
+    read_token(path).is_ok() || read_private::<Registration>(&registration_path(path)).is_ok()
+}
+
+/// Reuse only the OAuth app registration for a new account, never its tokens or user binding.
+pub fn prepare_new_account(source: &Path, target: &Path) -> Result<()> {
+    let client = match read_token(source) {
+        Ok(token) => token.client,
+        Err(Error::AuthRequired) => {
+            read_private::<Registration>(&registration_path(source))?.client
+        }
+        Err(error) => return Err(error),
+    };
+    let _lock = auth_lock(target)?;
+    if target.exists() || registration_path(target).exists() {
+        return Err(Error::Changed);
+    }
+    save_private(
+        &registration_path(target),
+        &Registration {
+            client,
+            drive_user_id: None,
+            identity: None,
+        },
+    )
+}
+
+/// Caller first drains the service and acquires its engine lock. Cloud grants
+/// are not revoked, because revocation could affect another profile's grant.
+pub fn disconnect_local(path: &Path) -> Result<()> {
+    let _lock = auth_lock(path)?;
+    let token = match read_token(path) {
+        Ok(token) => token,
+        Err(Error::AuthRequired)
+            if read_private::<Registration>(&registration_path(path)).is_ok() =>
+        {
+            return Ok(())
+        }
+        Err(error) => return Err(error),
+    };
+    save_private(
+        &registration_path(path),
+        &Registration {
+            client: token.client,
+            drive_user_id: Some(token.drive_user_id),
+            identity: token.identity,
+        },
+    )?;
+    fs::remove_file(path)?;
+    File::open(path.parent().ok_or(Error::Changed)?)?.sync_all()?;
+    Ok(())
+}
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -167,6 +242,9 @@ fn auth_lock(path: &Path) -> Result<File> {
     Ok(lock)
 }
 fn read_token(path: &Path) -> Result<StoredToken> {
+    read_private(path)
+}
+fn read_private<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
@@ -191,6 +269,9 @@ fn read_token(path: &Path) -> Result<StoredToken> {
     Ok(serde_json::from_reader(file.take(65537))?)
 }
 fn save_token(path: &Path, value: &StoredToken) -> Result<()> {
+    save_private(path, value)
+}
+fn save_private(path: &Path, value: &impl Serialize) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| Error::Invalid("OAuth storage needs parent directory".into()))?;
@@ -445,7 +526,13 @@ pub async fn login(
 pub async fn login_desktop(client_path: Option<&Path>, path: &Path) -> Result<()> {
     let client = match client_path {
         Some(p) => DesktopClient::load(p)?,
-        None => read_token(path)?.client,
+        None => match read_token(path) {
+            Ok(token) => token.client,
+            Err(Error::AuthRequired) => {
+                read_private::<Registration>(&registration_path(path))?.client
+            }
+            Err(error) => return Err(error),
+        },
     };
     login_flow(
         client,
@@ -472,6 +559,19 @@ async fn login_flow(
         Err(Error::AuthRequired) => None,
         Err(e) => return Err(e),
     };
+    let registration = match read_private::<Registration>(&registration_path(path)) {
+        Ok(registration) => Some(registration),
+        Err(Error::AuthRequired) => None,
+        Err(error) => return Err(error),
+    };
+    let expected_user = previous
+        .as_ref()
+        .map(|p| p.drive_user_id.as_str())
+        .or_else(|| {
+            registration
+                .as_ref()
+                .and_then(|r| r.drive_user_id.as_deref())
+        });
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
     let redirect = format!(
         "http://127.0.0.1:{}/oauth/callback",
@@ -549,9 +649,7 @@ async fn login_flow(
     let about: About =
         serde_json::from_slice(&bounded_body(response).await?).map_err(|_| Error::AuthRequired)?;
     if about.user.permission_id.is_empty()
-        || previous
-            .as_ref()
-            .is_some_and(|p| p.drive_user_id != about.user.permission_id)
+        || expected_user.is_some_and(|id| id != about.user.permission_id)
     {
         return Err(Error::Invalid(
             if announce {
@@ -600,6 +698,54 @@ mod tests {
             scope: DRIVE_SCOPE.into(),
             drive_user_id: "owner".into(),
             identity: None,
+        }
+    }
+    #[test]
+    fn disconnect_retains_binding_without_tokens_and_new_account_only_copies_client() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = token_path(temp.path(), "first");
+        let mut token = stored();
+        token.identity = Some(AccountIdentity {
+            email: "first@example.test".into(),
+            display_name: "First".into(),
+        });
+        save_token(&source, &token).unwrap();
+        let target = token_path(&temp.path().join("second"), "default");
+        prepare_new_account(&source, &target).unwrap();
+        assert!(!target.exists());
+        let new: Registration = read_private(&registration_path(&target)).unwrap();
+        assert_eq!(new.client.client_id, token.client.client_id);
+        assert!(new.drive_user_id.is_none() && new.identity.is_none());
+        assert!(prepare_new_account(&source, &target).is_err());
+        disconnect_local(&source).unwrap();
+        assert!(!source.exists());
+        assert!(matches!(saved_identity(&source), Err(Error::AuthRequired)));
+        assert_eq!(registered_identity(&source), token.identity);
+        let retained: Registration = read_private(&registration_path(&source)).unwrap();
+        assert_eq!(retained.drive_user_id.as_deref(), Some("owner"));
+        let bytes = fs::read_to_string(registration_path(&source)).unwrap();
+        assert!(!bytes.contains("old-access") && !bytes.contains("old-refresh"));
+        assert_eq!(
+            fs::metadata(registration_path(&source)).unwrap().mode() & 0o777,
+            0o600
+        );
+        disconnect_local(&source).unwrap();
+        assert!(has_saved_client(&source));
+    }
+
+    #[test]
+    fn disconnect_never_follows_a_registration_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = token_path(temp.path(), "first");
+        save_token(&source, &stored()).unwrap();
+        let outside = temp.path().join("outside");
+        fs::write(&outside, b"keep").unwrap();
+        symlink(&outside, registration_path(&source)).unwrap();
+        // Atomic replace may replace the symlink, but must never follow it.
+        let _ = disconnect_local(&source);
+        assert_eq!(fs::read(&outside).unwrap(), b"keep");
+        if source.exists() {
+            assert!(read_token(&source).is_ok());
         }
     }
     #[tokio::test]

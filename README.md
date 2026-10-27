@@ -2,9 +2,11 @@
 
 Google Drive synchronization for Linux, written in Rust. Browse My Drive from the desktop and file manager, download content when needed, and select files or folders to keep available offline.
 
-**Latest release: [v1.0.6](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.6)** — amd64 `.deb` packages for Ubuntu 24.04/Linux Mint 22 and x86_64 AppImage. This is an independent project and is not affiliated with Google.
+**Latest release: [v1.1.0](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.1.0)** — amd64 `.deb` packages for Ubuntu 24.04/Linux Mint 22 and x86_64 AppImage. This is an independent project and is not affiliated with Google.
 
 The dashboard displays the running version and checks GitHub releases periodically. Package downloads and installation require **Update now** and SHA-256 verification. See the [changelog](CHANGELOG.md).
+
+Manage accounts from the avatar menu or **Manage accounts**. Each account keeps its own folders, tokens and sync state. See [multi-account management](docs/MULTI_ACCOUNT.md) and [storage and recovery](docs/STORAGE_RECOVERY.md).
 
 ## Application preview
 
@@ -13,6 +15,8 @@ Screenshots use example profiles and files on Linux. The Thunar virtual drive co
 | Sync dashboard | Online drive in Thunar |
 | --- | --- |
 | ![MyGdrive Rust dashboard](docs/screenshots/dashboard.png) | ![MyGdrive virtual drive in Thunar](docs/screenshots/online-drive.png) |
+| **Multi-account management** | **Storage and recovery** |
+| ![Manage independent Google accounts](docs/screenshots/multi-account-manager.png) | ![Profile disk usage and recovery](docs/screenshots/storage-recovery.png) |
 | **Available offline selections** | **Sync activity details** |
 | ![Offline file and folder selections](docs/screenshots/offline-browser.png) | ![Sync activity window](docs/screenshots/sync-activity.png) |
 
@@ -24,7 +28,8 @@ Screenshots use example profiles and files on Linux. The Thunar virtual drive co
 - Office owner files (`~$…`), LibreOffice locks (`.~lock.…#`), and known Word scratch patterns do not enter new sync queues. Temporary-file-and-rename saves remain supported.
 - Preserve-both content conflicts; some recovery cases wait for review before uploading.
 - Dashboard, tray, queue, activity history, pause/resume, and manual sync. On X11/Xfce, left-clicking the tray opens activity at the right edge of the clicked monitor, inside its usable work area. Wayland uses compositor-controlled placement. Notifications do not automatically open the activity window; **View details** opens it.
-- Separate account/Drive-folder/local-folder profiles with independent state.
+- **Storage and recovery** shows profile disk usage and paginated file issues, opens local/Drive locations, reviews recovery copies with generation/checksum checks, and safely cleans reproducible cache through the service.
+- Unified avatar account switcher and account manager, with independent account/Drive-folder/local-folder profiles, pause/resume, reconnect and local disconnect.
 - Linux FUSE mount, Thunar context actions and folder badges, and optional autostart per profile.
 - Persistent SQLite WAL queues, content checksums, restart recovery, and cache cleanup that protects offline files and local changes.
 - Missing unpublished temporary files complete locally after active upload and recovery journals have been checked.
@@ -58,7 +63,7 @@ Translations live in [`assets/locales/`](assets/locales/): `en.json`, `id.json`,
 
 ## Run the AppImage
 
-Download `mygdrive-rust_1.0.6_x86_64.AppImage` from [release v1.0.6](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.0.6):
+Download `mygdrive-rust_1.0.6_x86_64.AppImage` from [release v1.1.0](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.1.0):
 
 ```bash
 chmod +x mygdrive-rust_1.0.6_x86_64.AppImage
@@ -104,7 +109,7 @@ The **Application** card shows the running version, check/download/install statu
 - AppImage updates require host `python3` and write access to the AppImage and its directory. Staging uses the same filesystem, verifies the release's `SHA256SUMS`, and atomically replaces the original. Interrupted or invalid downloads leave the old file intact.
 - `.deb` updates verify the checksum, package name, version, and architecture. `pkexec` requests administrator authentication and runs `apt-get --yes --no-remove install` on the verified package. Passwords are not stored. Authentication rejection or installation failure is reported; a later installation still requires a new user action. `install.log` is stored beside the updater status file.
 - After a verified installation, the application drains the current profile service, closes the old desktop, and opens the updated launcher automatically. A previously running service starts again with its saved pause state; a stopped service stays stopped. The profile, language, and window visibility are retained. If drain/relaunch cannot be confirmed, the dashboard reports the problem and **Restart now** can retry. Active FUSE mounts are retained to protect open editor handles; remount later to replace that helper. Profiles share an update lock per installation location.
-- Automatic restart is implemented in v1.0.6. When upgrading from v1.0.5 or earlier, reopen once manually; later updates can restart automatically.
+- Automatic restart is implemented in v1.1.0. When upgrading from v1.0.5 or earlier, reopen once manually; later updates can restart automatically.
 
 Version 1.0.2 and earlier require a one-time manual upgrade to a package containing the updater. Source/development builds check versions but open the release page for manual installation. Standalone CLI and mount processes do not check for updates.
 
@@ -193,16 +198,16 @@ The `drive` scope allows reading and managing accessible Drive files. Choosing a
 
 ## Comparison with Google Drive for desktop
 
-The repository's comparison was recorded on 25 October 2026 using Google's documentation. MyGdrive Rust is a Linux client; Google's desktop application targets Windows and macOS. This is not a claim of feature parity.
+The repository's comparison was updated on 28 October 2026 using Google's documentation. MyGdrive Rust is a Linux client; Google's desktop application targets Windows and macOS. This is not a claim of feature parity.
 
 | Behavior | Google Drive for desktop | MyGdrive Rust |
 | --- | --- | --- |
 | Metadata browsing | Streaming virtual drive; content fetched as needed ([stream/mirror](https://support.google.com/drive/answer/13401938?hl=en)) | Metadata by default; FUSE mount with separate setup |
 | Offline file/subfolder selection | Independent selections, including future folder children ([offline access](https://support.google.com/drive/answer/2375012?hl=en)) | Independent recursive pins; downloads require a running, unpaused service |
-| Streaming disk usage | Managed cache and offline-files view ([cache settings](https://support.google.com/drive/answer/13470231?hl=en)) | Unpin cleanup; optional cache budget, no unified disk-usage view or automatic eviction of all opened local copies |
+| Streaming disk usage | Managed cache and offline-files view ([cache settings](https://support.google.com/drive/answer/13470231?hl=en)) | Per-profile allocated disk usage, issue/recovery review, unpin cleanup and safe cache cleanup, with an optional cache budget. Unified budgeting/retention across backing and recovery remains planned |
 | Mirror My Drive | User-facing stream/mirror switch | Internal legacy mirror mode; no supported dashboard mode migration |
 | Shared Drives | Streaming support | My Drive/subfolders only |
-| Multiple accounts | Up to four concurrent accounts ([account settings](https://support.google.com/drive/answer/13470231?hl=en)) | Separate profiles; no unified supervisor |
+| Multiple accounts | Up to four concurrent accounts ([account settings](https://support.google.com/drive/answer/13470231?hl=en)) | Unified avatar switcher and account manager; independent profile services, targeted pause/resume/disconnect and collection-wide update restart |
 | Google Workspace documents | Separate browser/offline integration | No native offline round-trip implementation |
 
 See the [detailed audit](AUDIT_GOOGLE_DRIVE_DESKTOP.md) for remaining product and efficiency gaps.

@@ -43,7 +43,7 @@ install -m644 packaging/appimage/mygdrive.desktop "$app_dir/mygdrive.desktop"
 install -m644 packaging/appimage/mygdrive.desktop "$app_dir/usr/share/applications/mygdrive.desktop"
 install -m644 assets/mygdrive.svg "$app_dir/mygdrive.svg"
 ln -s mygdrive.svg "$app_dir/.DirIcon"
-for document in README.md CHANGELOG.md OAUTH_SETUP.md LICENSE docs/PERFORMANCE.md docs/LOCALIZATION.md docs/screenshots/*.png; do
+for document in README.md CHANGELOG.md OAUTH_SETUP.md LICENSE docs/PERFORMANCE.md docs/LOCALIZATION.md docs/STORAGE_RECOVERY.md docs/MULTI_ACCOUNT.md docs/screenshots/*.png; do
     install -Dm644 "$document" "$app_dir/usr/share/doc/mygdrive-rust/$document"
 done
 install -d "$app_dir/usr/share/metainfo"

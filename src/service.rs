@@ -89,6 +89,7 @@ pub enum Action {
     OfflineList,
     OfflineSet,
     Hydrate,
+    Maintenance,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,6 +100,8 @@ pub struct Request {
     pub action: Action,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offline: Option<crate::offline::Request>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<crate::maintenance::Request>,
 }
 impl Request {
     pub fn new(action: Action) -> Self {
@@ -108,6 +111,7 @@ impl Request {
             session_id: None,
             action,
             offline: None,
+            maintenance: None,
         }
     }
 }
@@ -121,6 +125,8 @@ pub struct Reply {
     pub status: ServiceStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offline: Option<crate::offline::Page>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<crate::maintenance::Outcome>,
 }
 struct Control {
     status: ServiceStatus,
@@ -146,38 +152,40 @@ impl ReadConnections {
 impl Control {
     fn apply(&mut self, request: &Request) -> Reply {
         let mut duplicate = false;
-        let error =
-            if request.version != VERSION || uuid::Uuid::parse_str(&request.request_id).is_err() {
-                Some("unsupported protocol version or invalid request ID")
-            } else if request.offline.is_some()
-                || matches!(
-                    request.action,
-                    Action::OfflineList | Action::OfflineSet | Action::Hydrate
-                )
-            {
-                Some("unsupported payload for service control")
-            } else if request
-                .session_id
-                .as_ref()
-                .is_some_and(|s| s != &self.status.session_id)
-            {
-                Some("service session changed; fetch status before retrying")
-            } else if let Some((_, action)) =
-                self.recent.iter().find(|(id, _)| id == &request.request_id)
-            {
-                duplicate = true;
-                if action != &request.action {
-                    Some("request ID already used for another action")
-                } else {
-                    None
-                }
-            } else if request.action == Action::SyncNow && self.status.paused {
-                Some("service is paused; resume first")
-            } else if self.status.shutdown_requested && request.action != Action::Status {
-                Some("service is shutting down")
+        let error = if request.version != VERSION
+            || uuid::Uuid::parse_str(&request.request_id).is_err()
+        {
+            Some("unsupported protocol version or invalid request ID")
+        } else if request.offline.is_some()
+            || request.maintenance.is_some()
+            || matches!(
+                request.action,
+                Action::OfflineList | Action::OfflineSet | Action::Hydrate | Action::Maintenance
+            )
+        {
+            Some("unsupported payload for service control")
+        } else if request
+            .session_id
+            .as_ref()
+            .is_some_and(|s| s != &self.status.session_id)
+        {
+            Some("service session changed; fetch status before retrying")
+        } else if let Some((_, action)) =
+            self.recent.iter().find(|(id, _)| id == &request.request_id)
+        {
+            duplicate = true;
+            if action != &request.action {
+                Some("request ID already used for another action")
             } else {
                 None
-            };
+            }
+        } else if request.action == Action::SyncNow && self.status.paused {
+            Some("service is paused; resume first")
+        } else if self.status.shutdown_requested && request.action != Action::Status {
+            Some("service is shutting down")
+        } else {
+            None
+        };
         if error.is_none() && !duplicate && request.action != Action::Status {
             match request.action {
                 Action::Pause => {
@@ -212,7 +220,10 @@ impl Control {
                     self.status.phase = "stopping".into();
                 }
                 Action::Status => {}
-                Action::OfflineList | Action::OfflineSet | Action::Hydrate => unreachable!(),
+                Action::OfflineList
+                | Action::OfflineSet
+                | Action::Hydrate
+                | Action::Maintenance => unreachable!(),
             }
             if self.recent.len() == 256 {
                 self.recent.pop_front();
@@ -229,6 +240,7 @@ impl Control {
             error: error.map(String::from),
             status: self.status.clone(),
             offline: None,
+            maintenance: None,
         }
     }
 }
@@ -373,7 +385,9 @@ async fn connection(
     .map_err(|_| Error::Invalid("IPC request timed out".into()))??;
     let request: Request =
         serde_json::from_slice(&bytes).map_err(|_| Error::Invalid("invalid IPC request".into()))?;
-    let reply = if matches!(
+    let reply = if request.action == Action::Maintenance {
+        maintenance_request(&request, &engine, &shared, &wake).await
+    } else if matches!(
         request.action,
         Action::OfflineList | Action::OfflineSet | Action::Hydrate
     ) {
@@ -400,6 +414,7 @@ async fn connection(
                 error: Some("request ID already used for offline selection".into()),
                 status: c.status.clone(),
                 offline: None,
+                maintenance: None,
             }
         } else {
             c.apply(&request)
@@ -416,6 +431,60 @@ async fn connection(
     write.write_all(&data).await?;
     Ok(())
 }
+async fn maintenance_request(
+    request: &Request,
+    engine: &SyncEngine,
+    shared: &Mutex<Control>,
+    wake: &Notify,
+) -> Reply {
+    let valid = {
+        let c = shared.lock().await;
+        request.version == VERSION
+            && uuid::Uuid::parse_str(&request.request_id).is_ok()
+            && request.session_id.as_ref() == Some(&c.status.session_id)
+            && request.offline.is_none()
+            && !c.status.shutdown_requested
+            && !c.recent.iter().any(|(id, _)| id == &request.request_id)
+    };
+    let result = async {
+        if !valid {
+            return Err(Error::Changed);
+        }
+        let command = request.maintenance.as_ref().ok_or(Error::Changed)?;
+        engine.maintain(&request.request_id, command).await
+    }
+    .await;
+    let (outcome, duplicate, error) = match result {
+        Ok((outcome, duplicate)) => {
+            if matches!(outcome, crate::maintenance::Outcome::RecoveryApproved) {
+                let mut c = shared.lock().await;
+                if !c.status.paused && !c.status.shutdown_requested {
+                    c.status.sync_requested = true;
+                    wake.notify_one();
+                }
+            }
+            (Some(outcome), duplicate, None)
+        }
+        Err(_) => (
+            None,
+            false,
+            Some(
+                "maintenance not confirmed; refresh file and service status before retrying".into(),
+            ),
+        ),
+    };
+    Reply {
+        version: VERSION,
+        request_id: request.request_id.clone(),
+        accepted: error.is_none(),
+        duplicate,
+        error,
+        status: shared.lock().await.status.clone(),
+        offline: None,
+        maintenance: outcome,
+    }
+}
+
 async fn offline_request(
     request: &Request,
     engine: &SyncEngine,
@@ -426,6 +495,7 @@ async fn offline_request(
     let valid = {
         let c = shared.lock().await;
         request.version == VERSION
+            && request.maintenance.is_none()
             && uuid::Uuid::parse_str(&request.request_id).is_ok()
             && request
                 .session_id
@@ -502,10 +572,11 @@ async fn offline_request(
         error,
         status: shared.lock().await.status.clone(),
         offline: page,
+        maintenance: None,
     }
 }
 pub async fn send(state: &Path, request: &Request) -> Result<Reply> {
-    let deadline = if request.action == Action::Hydrate {
+    let deadline = if matches!(request.action, Action::Hydrate | Action::Maintenance) {
         600
     } else if matches!(request.action, Action::OfflineList | Action::OfflineSet) {
         30

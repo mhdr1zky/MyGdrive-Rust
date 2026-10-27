@@ -18,6 +18,7 @@ pub struct Plan {
     launcher: Launcher,
     language: String,
     pub start_service: bool,
+    pub restore_accounts: bool,
     background: bool,
     progress: bool,
 }
@@ -41,6 +42,7 @@ impl Launcher {
             launcher: self.clone(),
             language: language.into(),
             start_service: false,
+            restore_accounts: false,
             background,
             progress,
         })
@@ -75,6 +77,9 @@ impl Plan {
             .arg(&self.language);
         if self.start_service {
             command.arg("--start-service");
+        }
+        if self.restore_accounts {
+            command.arg("--restore-accounts");
         }
         if self.background {
             command.arg("--background");
@@ -137,6 +142,7 @@ mod tests {
             launcher,
             language: "auto".into(),
             start_service: true,
+            restore_accounts: false,
             background: true,
             progress: false,
         };

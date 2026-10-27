@@ -120,6 +120,8 @@ pub enum Command {
     Shutdown,
     ShutdownAndWait,
     RestartAfterUpdate,
+    ShutdownCollectionAndWait,
+    RestartCollectionAfterUpdate,
     Start,
     SetAutostart(bool),
 }
@@ -177,11 +179,13 @@ pub fn spawn_observer(
                     tokio::select!{
                         command=input.recv()=>{
                             let Some(command)=command else{return false;};
-                            let restart = matches!(command, Command::RestartAfterUpdate);
+                            let restart = matches!(command, Command::RestartAfterUpdate|Command::RestartCollectionAfterUpdate);
                             let start_service = restart && read_snapshot(&state).await.live;
-                            let result=perform(&state,&binary,command).await;
+                            let result=if matches!(command,Command::ShutdownCollectionAndWait|Command::RestartCollectionAfterUpdate){
+                                crate::account_manager::drain_collection(&crate::account_manager::base_for(&state),&binary,restart).await.map(|()|tr("Semua layanan akun berhenti dengan tertib."))
+                            }else{perform(&state,&binary,command).await};
                             if matches!(command,Command::SetAutostart(_)){let _=events.send(Event::Autostart(settings()));}
-                            let event=if restart && result.is_ok() { Event::RestartReady { start_service } } else if matches!(command,Command::ShutdownAndWait) && result.is_ok(){Event::ExitReady}else{Event::Completed(result.map_err(|_|tr("Perintah belum terkonfirmasi. Periksa status service sebelum mencoba kembali.").into()))};
+                            let event=if restart && result.is_ok() { Event::RestartReady { start_service } } else if matches!(command,Command::ShutdownAndWait|Command::ShutdownCollectionAndWait) && result.is_ok(){Event::ExitReady}else{Event::Completed(result.map_err(|_|tr("Perintah belum terkonfirmasi. Periksa status service sebelum mencoba kembali.").into()))};
                             if events.send(event).is_err(){return false;}
                         },
                         _=poll.tick()=>{},
@@ -224,6 +228,14 @@ pub async fn read_snapshot(state: &Path) -> Snapshot {
     }
 }
 pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'static str> {
+    if matches!(
+        command,
+        Command::ShutdownCollectionAndWait | Command::RestartCollectionAfterUpdate
+    ) {
+        return Err(Error::Invalid(
+            "collection commands require the desktop controller".into(),
+        ));
+    }
     let command = if matches!(command, Command::RestartAfterUpdate) {
         Command::ShutdownAndWait
     } else {
@@ -281,7 +293,11 @@ pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'
         Command::Resume => Action::Resume,
         Command::SyncNow => Action::SyncNow,
         Command::Shutdown | Command::ShutdownAndWait => Action::Shutdown,
-        Command::Start | Command::SetAutostart(_) | Command::RestartAfterUpdate => unreachable!(),
+        Command::Start
+        | Command::SetAutostart(_)
+        | Command::RestartAfterUpdate
+        | Command::ShutdownCollectionAndWait
+        | Command::RestartCollectionAfterUpdate => unreachable!(),
     };
     let mut request = Request::new(action);
     request.session_id = Some(current.status.session_id);
@@ -310,10 +326,14 @@ pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'
         Command::SyncNow => tr("Sinkronisasi telah dijadwalkan."),
         Command::Shutdown => tr("Service akan berhenti setelah siklus aktif selesai."),
         Command::ShutdownAndWait => unreachable!(),
-        Command::Start | Command::SetAutostart(_) | Command::RestartAfterUpdate => unreachable!(),
+        Command::Start
+        | Command::SetAutostart(_)
+        | Command::RestartAfterUpdate
+        | Command::ShutdownCollectionAndWait
+        | Command::RestartCollectionAfterUpdate => unreachable!(),
     })
 }
-fn engine_available(state: &Path) -> Result<bool> {
+pub(crate) fn engine_available(state: &Path) -> Result<bool> {
     use fs2::FileExt;
     let file = match OpenOptions::new()
         .read(true)

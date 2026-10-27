@@ -33,8 +33,8 @@ def dump(value):
 
 
 class Demo:
-    def __init__(self, directory):
-        self.state = directory / "profile"
+    def __init__(self, directory, state=None):
+        self.state = state or directory / "profile"
         self.root = directory / "My Drive Demo"
         self.mount = directory / "My Drive - Demo"
         for path in [self.state / "control", self.root, self.mount]:
@@ -48,6 +48,7 @@ class Demo:
         self.db.executescript("CREATE TABLE materialized_directories(id TEXT PRIMARY KEY,relative_path TEXT NOT NULL,remote_id TEXT UNIQUE,data TEXT NOT NULL);")
         self.files, self.remotes, self.paths = {}, {}, {}
         self.activity = False
+        self.paused = False
         self.folder("documents", "Dokumen", "root")
         self.folder("photos", "Foto dan aset", "root")
         self.folder("project", "Arsip tim", "root")
@@ -120,7 +121,7 @@ class Demo:
         now = int(time.time()*1000)
         return dict(version=1, session_id="synthetic-demo", pid=os.getpid(), running=True,
                     started_at_ms=now-600000, heartbeat_at_ms=now, stopped_at_ms=None, config=self.config,
-                    phase="syncing" if self.activity else "idle", connection="online", paused=False,
+                    phase="syncing" if self.activity else "idle", connection="online", paused=self.paused,
                     cycle_active=self.activity, sync_requested=False, shutdown_requested=False,
                     local_watcher_active=True, last_sync_started_ms=now-1000, last_sync_finished_ms=now-5000,
                     last_success_ms=now-5000, cycles_finished=24, pending_operations=1 if self.activity else 0,
@@ -219,6 +220,26 @@ def capture(args):
     with tempfile.TemporaryDirectory(prefix="mygdrive-previews-") as temp:
         directory = Path(temp)
         demo = Demo(directory)
+        extra_demos = []
+        if args.accounts_only:
+            extra_demos = [Demo(directory / "work", demo.state / "profiles/work"),
+                           Demo(directory / "archive", demo.state / "profiles/archive")]
+            extra_demos[0].paused = True
+            for index, (account, name, email) in enumerate(zip([demo, *extra_demos],
+                    ["Alya Putri", "Tim Produk", "Arsip Pribadi"],
+                    ["alya@example.test", "produk@example.test", "arsip@example.test"])):
+                token = account.state / "oauth/2a97516c354b68848cdbd8f54a226a0a55b21ed138e207ad6c5cbb9c00aa5aea.json"
+                token.parent.mkdir(mode=0o700)
+                token.write_text(dump(dict(client=dict(client_id="preview.apps.googleusercontent.com", client_secret="synthetic"),
+                    access_token="synthetic", refresh_token="synthetic", expires_at_ms=9223372036854775807,
+                    scope="https://www.googleapis.com/auth/drive", drive_user_id=f"synthetic-{index}",
+                    identity=dict(email=email, display_name=name))))
+                token.chmod(0o600)
+            token = extra_demos[1].state / "oauth/2a97516c354b68848cdbd8f54a226a0a55b21ed138e207ad6c5cbb9c00aa5aea.json"
+            registration = json.loads(token.read_text())
+            token.with_suffix(".client.json").write_text(dump({key: registration[key] for key in ["client", "drive_user_id", "identity"]}))
+            token.with_suffix(".client.json").chmod(0o600)
+            token.unlink()
         env = os.environ.copy()
         for name, folder in [("XDG_CONFIG_HOME", "config"), ("XDG_DATA_HOME", "data"), ("XDG_CACHE_HOME", "cache"), ("XDG_RUNTIME_DIR", "runtime")]:
             path = directory / folder
@@ -245,6 +266,13 @@ def capture(args):
         server.demo = demo
         server.daemon_threads = True
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        extra_servers = []
+        for account in extra_demos[:1]:
+            other = socketserver.ThreadingUnixStreamServer(str(account.state / "control/service.sock"), Handler)
+            other.demo = account
+            other.daemon_threads = True
+            threading.Thread(target=other.serve_forever, daemon=True).start()
+            extra_servers.append(other)
         lib = x11()
         host_display = os.environ.get("MYGDRIVE_PREVIEW_HOST_DISPLAY", os.environ.get("DISPLAY", ""))
         host = lib.XOpenDisplay(host_display.encode())
@@ -294,6 +322,63 @@ def capture(args):
                 if not (OUT / filename).exists():
                     raise RuntimeError(f"Missing application snapshot {filename}")
 
+            if args.ui_test_binary:
+                for test in ["account_ui_tests::switching_accounts_reuses_window_and_replaces_profile_observers",
+                             "settings::tests::dashboard_discovers_new_json_without_restart_and_saves_its_selection"]:
+                    subprocess.run([str(Path(args.ui_test_binary).resolve()), "--ignored", "--exact", test, "--nocapture"],
+                                   env=env, check=True, timeout=60)
+            if args.ipc_check:
+                if not extra_demos:
+                    raise RuntimeError("--ipc-check requires --accounts-only synthetic profiles")
+                ipc_env = dict(env, MYGDRIVE_DISABLE_AUTO_UPDATE="1")
+                primary = subprocess.Popen([str(binary_dir / "mygdrive-desktop"), "--state", str(demo.state)],
+                                           env=ipc_env, stdout=log, stderr=log)
+                try:
+                    for _ in range(100):
+                        if find_window(lib, isolated, "MyGdrive Rust"):
+                            break
+                        if primary.poll() is not None:
+                            raise RuntimeError("Primary desktop exited before IPC test")
+                        time.sleep(.1)
+                    else:
+                        raise RuntimeError("Primary desktop window did not appear")
+                    for options in [["--background"], ["--accounts"]]:
+                        forwarded = subprocess.run([str(binary_dir / "mygdrive-desktop"), "--state", str(extra_demos[0].state), *options],
+                                                   env=ipc_env, stdout=log, stderr=log, timeout=8)
+                        if forwarded.returncode or primary.poll() is not None:
+                            raise RuntimeError("Profile launch did not forward to the existing desktop")
+                    for _ in range(100):
+                        if find_window(lib, isolated, "Manage accounts") or find_window(lib, isolated, "Kelola akun"):
+                            break
+                        time.sleep(.1)
+                    else:
+                        raise RuntimeError("Forwarded account manager did not open")
+                    print("Single-instance profile forwarding passed")
+                finally:
+                    primary.terminate()
+                    primary.wait(timeout=10)
+            if args.accounts_only:
+                render("multi-account-dashboard.png", [], "MyGdrive Rust")
+                render("multi-account-manager.png", ["--accounts"], "Kelola akun")
+                print("Multi-account previews captured:", OUT)
+                return
+            if args.maintenance_only:
+                # Synthetic review/error rows; never approve or contact Drive.
+                demo.file("recovery-demo", "Rencana kerja - Recovery.docx", "root", 8192, True)
+                recovery = demo.files["recovery-demo"]
+                recovery.update(status="recovery_review", review_required=True, remote_id=None, baseline=None)
+                demo.db.execute("UPDATE files SET remote_id=NULL,sync_status='recovery_review',data=? WHERE id=?", (dump(recovery), recovery["id"]))
+                problem = demo.files["budget"]
+                problem["metadata_issue"] = "quota"
+                demo.db.execute("UPDATE files SET data=? WHERE id=?", (dump(problem), problem["id"]))
+                for folder in ["cache", "outbox", "recovery"]:
+                    (demo.state / folder).mkdir(exist_ok=True)
+                    (demo.state / folder / "preview.blob").write_bytes(b"preview" * 4096)
+                (demo.root / ".mygdrive-internal-demo.swap").write_bytes(b"recovery" * 4096)
+                demo.db.commit()
+                render("storage-recovery.png", ["--maintenance"], "Storage and recovery")
+                print("Storage/recovery preview captured:", OUT)
+                return
             render("dashboard.png", [], "MyGdrive Rust")
             render("offline-browser.png", ["--offline"], "Tersedia offline")
             render("account-setup.png", ["--setup"], "Akun dan folder")
@@ -357,6 +442,11 @@ def capture(args):
             server.shutdown()
             server.server_close()
             demo.db.close()
+            for other in extra_servers:
+                other.shutdown()
+                other.server_close()
+            for account in extra_demos:
+                account.db.close()
 
 
 if __name__ == "__main__":
@@ -365,6 +455,10 @@ if __name__ == "__main__":
     parser.add_argument("--display", type=int, default=79)
     parser.add_argument("--compact", action="store_true", help="Verify GTK layouts at 480px window width")
     parser.add_argument("--gtk-only", action="store_true", help="Skip the native FUSE/Thunar capture")
+    parser.add_argument("--accounts-only", action="store_true", help="Render three synthetic accounts: running, paused and signed out")
+    parser.add_argument("--ipc-check", action="store_true", help="Verify foreground/background profile launches share one desktop")
+    parser.add_argument("--ui-test-binary", help="Run the isolated GTK account switching test executable")
+    parser.add_argument("--maintenance-only", action="store_true", help="Render only storage/recovery with synthetic review and quota issues")
     parser.add_argument("--output-dir", help="Use a separate output directory for package verification")
     parser.add_argument("--inside-session", action="store_true", help=argparse.SUPPRESS)
     options = parser.parse_args()

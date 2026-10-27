@@ -1608,6 +1608,178 @@ async fn recovery_review_survives_further_edits_and_moves_until_explicit_approva
 }
 
 #[tokio::test]
+async fn maintenance_recovery_rejects_stale_review_and_ack_replay_cannot_approve_new_edits() {
+    use mygdrive_sync::maintenance::{Outcome, Request};
+    let f = Fixture::new(true);
+    let engine = f.synced().await;
+    let mut editor = std::fs::OpenOptions::new()
+        .append(true)
+        .open(f.root.join("note.txt"))
+        .unwrap();
+    f.drive.put("original", "note.txt", b"remote replacement");
+    engine.sync_once().await.unwrap();
+    editor.write_all(b" late recovery edit").unwrap();
+    editor.sync_all().unwrap();
+    engine.recover_displaced().await.unwrap();
+    let reviewed = engine
+        .db
+        .files()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|file| file.review_required)
+        .unwrap();
+    let old = Request::ApproveRecovery {
+        file_id: reviewed.id.clone(),
+        generation: reviewed.generation,
+        sha256: reviewed.fingerprint.as_ref().unwrap().digest.sha256.clone(),
+    };
+    std::fs::write(
+        f.root.join(&reviewed.relative_path),
+        b"changed after opening review",
+    )
+    .unwrap();
+    assert!(engine
+        .maintain(&uuid::Uuid::new_v4().to_string(), &old)
+        .await
+        .is_err());
+    let current = engine.db.file(&reviewed.id).await.unwrap();
+    assert!(current.review_required);
+    let command = Request::ApproveRecovery {
+        file_id: current.id.clone(),
+        generation: current.generation,
+        sha256: current.fingerprint.as_ref().unwrap().digest.sha256.clone(),
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    assert_eq!(
+        engine.maintain(&id, &command).await.unwrap(),
+        (Outcome::RecoveryApproved, false)
+    );
+    assert_eq!(
+        engine.maintain(&id, &command).await.unwrap(),
+        (Outcome::RecoveryApproved, true)
+    );
+    let mut newer = engine.db.file(&reviewed.id).await.unwrap();
+    newer.review_required = true;
+    newer.status = "recovery_review".into();
+    newer.generation += 1;
+    engine.db.save_file(&newer).await.unwrap();
+    assert_eq!(
+        engine.maintain(&id, &command).await.unwrap(),
+        (Outcome::RecoveryApproved, true)
+    );
+    assert!(engine.db.file(&newer.id).await.unwrap().review_required);
+    assert!(engine
+        .maintain(&id, &Request::PruneCache { max_bytes: 0 })
+        .await
+        .is_err());
+    drop(editor);
+    drop(engine);
+    let restarted = f.engine().await;
+    assert_eq!(
+        restarted.maintain(&id, &command).await.unwrap(),
+        (Outcome::RecoveryApproved, true)
+    );
+    assert!(restarted.db.file(&newer.id).await.unwrap().review_required);
+}
+
+#[tokio::test]
+async fn maintenance_ipc_requires_current_session_and_preserves_pause_and_offline_pins() {
+    use mygdrive_sync::{
+        maintenance,
+        service::{self, Action, Request},
+    };
+    let f = Fixture::new(true);
+    let engine = Arc::new(f.synced().await);
+    let file = engine.db.by_remote("original").await.unwrap().unwrap();
+    engine.set_available_offline(&file.id, true).await.unwrap();
+    let recovery_path = f.root.join("recovery.txt");
+    std::fs::write(&recovery_path, b"reviewed recovered content").unwrap();
+    engine.scanner.scan().await.unwrap();
+    let mut recovery = engine
+        .db
+        .files()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|file| file.relative_path == "recovery.txt")
+        .unwrap();
+    recovery.status = "recovery_review".into();
+    recovery.review_required = true;
+    engine.db.save_file(&recovery).await.unwrap();
+    let mut task = tokio::spawn(service::run_owned(
+        engine.clone(),
+        f.state.clone(),
+        service_config(&f),
+        true,
+        CancellationToken::new(),
+    ));
+    let status = tokio::select! {
+        result = &mut task => panic!("maintenance service exited early: {result:?}"),
+        status = service_wait(&f.state, |status| status.paused) => status,
+    };
+    let mut request = Request::new(Action::Maintenance);
+    request.maintenance = Some(maintenance::Request::PruneCache { max_bytes: 0 });
+    assert!(!service::send(&f.state, &request).await.unwrap().accepted);
+    request.session_id = Some("old-session".into());
+    assert!(!service::send(&f.state, &request).await.unwrap().accepted);
+    request.session_id = Some(status.session_id.clone());
+    request.offline = Some(mygdrive_sync::offline::Request::List {
+        parent: "root".into(),
+        offset: 0,
+    });
+    assert!(!service::send(&f.state, &request).await.unwrap().accepted);
+    request.offline = None;
+    let reply = service::send(&f.state, &request).await.unwrap();
+    assert!(reply.accepted);
+    assert!(!reply.duplicate);
+    assert!(reply.status.paused);
+    assert!(matches!(
+        reply.maintenance,
+        Some(maintenance::Outcome::CachePruned {
+            removed_objects: 0,
+            ..
+        })
+    ));
+    let duplicate = service::send(&f.state, &request).await.unwrap();
+    assert!(duplicate.accepted && duplicate.duplicate);
+    let mut approve = Request::new(Action::Maintenance);
+    approve.session_id = Some(status.session_id.clone());
+    approve.maintenance = Some(maintenance::Request::ApproveRecovery {
+        file_id: recovery.id.clone(),
+        generation: recovery.generation,
+        sha256: recovery.fingerprint.as_ref().unwrap().digest.sha256.clone(),
+    });
+    let approved = service::send(&f.state, &approve).await.unwrap();
+    assert!(approved.accepted && approved.status.paused);
+    assert!(matches!(
+        approved.maintenance,
+        Some(maintenance::Outcome::RecoveryApproved)
+    ));
+    assert!(!engine.db.file(&recovery.id).await.unwrap().review_required);
+    assert!(engine
+        .db
+        .file(&recovery.id)
+        .await
+        .unwrap()
+        .remote_id
+        .is_none());
+    assert!(!engine.db.cached_objects().await.unwrap().is_empty());
+    assert_eq!(std::fs::read(f.root.join("note.txt")).unwrap(), b"baseline");
+    let page = maintenance::browse(&f.state, 0, true).await.unwrap();
+    assert!(page.live);
+    assert_eq!(
+        page.storage.as_ref().unwrap().skipped,
+        0,
+        "service socket is not missing file data"
+    );
+    service::send(&f.state, &Request::new(Action::Shutdown))
+        .await
+        .unwrap();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn pinned_dirty_and_active_cache_objects_are_not_evicted() {
     let fixture = Fixture::new(true);
     let engine = fixture.synced().await;
@@ -6215,4 +6387,71 @@ async fn desktop_update_restart_drains_active_work_and_preserves_paused_service(
             .unwrap(),
         "a stopped service must stay stopped after update"
     );
+}
+
+#[tokio::test]
+async fn multi_account_controls_are_targeted_and_update_restores_both_paused_profiles() {
+    use mygdrive_sync::{
+        account_manager,
+        dashboard::{self, Command},
+        oauth, service,
+    };
+    use std::os::unix::fs::PermissionsExt;
+    let collection = tempfile::tempdir().unwrap();
+    let base = collection.path().join("collection");
+    let mut first = Fixture::new(true);
+    let mut second = Fixture::new(true);
+    first.state = base.join("profiles/first");
+    second.state = base.join("profiles/second");
+    let mut tasks = Vec::new();
+    for fixture in [&first, &second] {
+        let engine = Arc::new(fixture.engine().await);
+        let token = oauth::token_path(&fixture.state, "test");
+        std::fs::create_dir_all(token.parent().unwrap()).unwrap();
+        std::fs::write(&token,serde_json::to_vec(&serde_json::json!({"client":{"client_id":"synthetic.apps.googleusercontent.com","client_secret":"synthetic"},"access_token":"synthetic","refresh_token":"synthetic","expires_at_ms":i64::MAX,"scope":oauth::DRIVE_SCOPE,"drive_user_id":fixture.state.to_string_lossy(),"identity":{"email":format!("{}@example.test",fixture.state.file_name().unwrap().to_string_lossy()),"display_name":"Synthetic"}})).unwrap()).unwrap();
+        std::fs::set_permissions(token, std::fs::Permissions::from_mode(0o600)).unwrap();
+        tasks.push(tokio::spawn(service::run_owned(
+            engine,
+            fixture.state.clone(),
+            service_config(fixture),
+            true,
+            CancellationToken::new(),
+        )));
+        service_wait(&fixture.state, |s| s.paused).await;
+    }
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_mygdrive-sync"));
+    account_manager::control(&base, &first.state, &binary, Command::Resume)
+        .await
+        .unwrap();
+    service_wait(&first.state, |s| !s.paused).await;
+    assert!(
+        dashboard::read_snapshot(&second.state)
+            .await
+            .status
+            .unwrap()
+            .paused
+    );
+    account_manager::control(&base, &first.state, &binary, Command::Pause)
+        .await
+        .unwrap();
+    service_wait(&first.state, |s| s.paused).await;
+    account_manager::drain_collection(&base, &binary, true)
+        .await
+        .unwrap();
+    for task in tasks {
+        task.await.unwrap().unwrap();
+    }
+    assert!(!dashboard::read_snapshot(&first.state).await.live);
+    assert!(!dashboard::read_snapshot(&second.state).await.live);
+    account_manager::restore_collection(&base, &binary)
+        .await
+        .unwrap();
+    for fixture in [&first, &second] {
+        let status = service_wait(&fixture.state, |s| s.paused).await;
+        assert!(status.paused && !status.cycle_active);
+    }
+    account_manager::drain_collection(&base, &binary, false)
+        .await
+        .unwrap();
+    assert!(!base.join("restart-accounts.json").exists());
 }
