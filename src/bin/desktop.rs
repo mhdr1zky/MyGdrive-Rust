@@ -26,6 +26,8 @@ mod restart;
 mod settings;
 #[path = "desktop/setup.rs"]
 mod setup;
+#[path = "desktop/theme.rs"]
+mod theme;
 #[path = "desktop/updater.rs"]
 mod updater;
 
@@ -70,46 +72,7 @@ struct Args {
     #[arg(long, hide = true)]
     restore_accounts: bool,
 }
-const CSS: &str = r#"
-.account-menu { padding: 4px 10px; }
-.account-popover { padding: 10px; }
-.account-choice { padding: 10px; border-color: transparent; }
-.selected-account { background: #eaf1ff; border-color: #c6d9ff; }
-.account-avatar { min-width: 38px; min-height: 38px; border-radius: 22px; font-size: 16px; font-weight: 700; background: #dce8ff; color: #245bc4; }
-.avatar-1 { background: #e5e0fa; color: #6942b5; }
-.avatar-2 { background: #d8f2e7; color: #18764b; }
-.avatar-3 { background: #ffe7d2; color: #9c5914; }
-.avatar-4 { background: #fce0e7; color: #a5375b; }
-.account-check { color: #3067da; font-weight: 800; }
-window { background: #f5f7fb; color: #19263c; font-family: Sans; }
-.topbar { background: #ffffff; border-bottom: 1px solid #e2e8f0; padding: 16px 24px; }
-.brand { font-size: 21px; font-weight: 800; color: #245bc4; }
-.brand-caption { font-size: 12px; color: #68778f; }
-.nav-item { background: #eaf0ff; color: #245bc4; border-radius: 10px; padding: 9px 14px; font-weight: 700; }
-.content { padding: 24px; }
-.eyebrow { color: #66768f; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
-.title { font-size: 28px; font-weight: 800; }
-.subtitle { color: #617089; font-size: 13px; }
-.card { background: #ffffff; border: 1px solid #e1e7f0; border-radius: 16px; padding: 18px; }
-.hero { background: #eef4ff; border-color: #d7e4ff; }
-.status-title { font-size: 21px; font-weight: 700; }
-.value { font-size: 30px; font-weight: 800; color: #245bc4; }
-.detail { font-size: 14px; }
-.pill { background: #e2f5eb; color: #146443; border-radius: 20px; padding: 6px 12px; font-size: 12px; font-weight: 700; }
-.pill.warning { background: #fff0d7; color: #86500a; }
-.notice { background: #edf2fa; color: #50627d; border-radius: 12px; padding: 12px; font-size: 12px; }
-.activity { font-size: 13px; color: #50627d; }
-button { background: #ffffff; color: #30415d; border: 1px solid #d9e1ed; border-radius: 10px; padding: 9px 13px; font-weight: 600; box-shadow: none; }
-button:hover { background: #edf3ff; border-color: #aac2f0; }
-button:focus-visible { outline: 2px solid #346be8; outline-offset: 2px; }
-button.suggested-action { background: #3067da; color: white; border: 1px solid #3067da; }
-button.suggested-action:hover { background: #2456bf; }
-button:disabled { opacity: 0.48; }
-flowboxchild { padding: 0; }
-list.boxed-list { background: white; border: 1px solid #e1e7f0; border-radius: 12px; padding: 6px; }
-progressbar trough { background: #e1e9f6; border-radius: 8px; min-height: 6px; }
-progressbar progress { background: #3067da; border-radius: 8px; min-height: 6px; }
-"#;
+const CSS: &str = include_str!("desktop/style.css");
 fn label(text: &str, class: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.set_xalign(0.0);
@@ -1247,6 +1210,7 @@ fn main() -> glib::ExitCode {
         .application_id(&id)
         .flags(flags)
         .build();
+    app.connect_startup(|_| theme::install());
     let initial = request_for(&args, state, &language);
     let activate = initial.clone();
     app.connect_activate(move |app| build(app, activate.clone(), None));

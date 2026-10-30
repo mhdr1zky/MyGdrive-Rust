@@ -247,6 +247,11 @@ def capture(args):
             env[name] = str(path)
         env.update(GDK_BACKEND="x11", GDK_DEBUG="no-portals", GSK_RENDERER="cairo", LIBGL_ALWAYS_SOFTWARE="1",
                    GTK_USE_PORTAL="0", GTK_A11Y="none", GIO_USE_VFS="local", NO_AT_BRIDGE="1")
+        if args.theme:
+            env.pop("GTK_THEME", None)
+            gtk_config = Path(env["XDG_CONFIG_HOME"]) / "gtk-4.0"
+            gtk_config.mkdir()
+            (gtk_config / "settings.ini").write_text(f"[Settings]\ngtk-theme-name={args.theme}\n")
         thunar_config = Path(env["XDG_CONFIG_HOME"]) / "Thunar"
         thunar_config.mkdir()
         (thunar_config / "thunarrc").write_text("[Configuration]\nLastView=ThunarDetailsView\nLastSidePane=void\nLastLocationBar=ThunarLocationButtons\nLastWindowWidth=1100\nLastWindowHeight=730\nLastShowHidden=FALSE\n")
@@ -455,6 +460,7 @@ if __name__ == "__main__":
     parser.add_argument("--display", type=int, default=79)
     parser.add_argument("--compact", action="store_true", help="Verify GTK layouts at 480px window width")
     parser.add_argument("--gtk-only", action="store_true", help="Skip the native FUSE/Thunar capture")
+    parser.add_argument("--theme", help="Use a GTK theme inside the isolated preview session")
     parser.add_argument("--accounts-only", action="store_true", help="Render three synthetic accounts: running, paused and signed out")
     parser.add_argument("--ipc-check", action="store_true", help="Verify foreground/background profile launches share one desktop")
     parser.add_argument("--ui-test-binary", help="Run the isolated GTK account switching test executable")

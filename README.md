@@ -2,7 +2,7 @@
 
 Google Drive synchronization for Linux, written in Rust. Browse My Drive from the desktop and file manager, download content when needed, and select files or folders to keep available offline.
 
-**Latest release: [v1.1.0](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.1.0)** — amd64 `.deb` packages for Ubuntu 24.04/Linux Mint 22 and x86_64 AppImage. This is an independent project and is not affiliated with Google.
+**Latest release: [v1.1.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.1.1)** — amd64 `.deb` packages for Ubuntu 24.04/Linux Mint 22 and x86_64 AppImage. This is an independent project and is not affiliated with Google.
 
 The dashboard displays the running version and checks GitHub releases periodically. Package downloads and installation require **Update now** and SHA-256 verification. See the [changelog](CHANGELOG.md).
 
@@ -34,6 +34,7 @@ Screenshots use example profiles and files on Linux. The Thunar virtual drive co
 - Persistent SQLite WAL queues, content checksums, restart recovery, and cache cleanup that protects offline files and local changes.
 - Missing unpublished temporary files complete locally after active upload and recovery journals have been checked.
 - File-based English, Indonesian, and Simplified Chinese interface translations, selected from the system locale by default.
+- System GTK theme colors throughout the desktop, with light/dark changes applied to open windows automatically.
 
 ## Interface language
 
@@ -63,14 +64,14 @@ Translations live in [`assets/locales/`](assets/locales/): `en.json`, `id.json`,
 
 ## Run the AppImage
 
-Download `mygdrive-rust_1.0.6_x86_64.AppImage` from [release v1.1.0](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.1.0):
+Download `mygdrive-rust_1.1.1_x86_64.AppImage` from [release v1.1.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.1.1):
 
 ```bash
-chmod +x mygdrive-rust_1.0.6_x86_64.AppImage
-./mygdrive-rust_1.0.6_x86_64.AppImage
+chmod +x mygdrive-rust_1.1.1_x86_64.AppImage
+./mygdrive-rust_1.1.1_x86_64.AppImage
 # CLI and virtual drive helper:
-./mygdrive-rust_1.0.6_x86_64.AppImage --sync --help
-./mygdrive-rust_1.0.6_x86_64.AppImage --mount --help
+./mygdrive-rust_1.1.1_x86_64.AppImage --sync --help
+./mygdrive-rust_1.1.1_x86_64.AppImage --mount --help
 ```
 
 The x86_64 AppImage targets Ubuntu 24.04/Linux Mint 22 or systems with glibc 2.39+. GTK libraries are bundled; graphics drivers, fonts, browser, and desktop services come from the host. It is not a sandbox. State and tokens use the native location (`~/.local/share/mygdrive/`); do not run `.deb` and AppImage processes against the same profile simultaneously.
@@ -81,10 +82,10 @@ Keep the AppImage at a fixed location before enabling **Start at login**. **Upda
 
 ## Install the Debian package
 
-Download `mygdrive-rust_1.0.6_amd64.deb` from the repository's Releases page:
+Download `mygdrive-rust_1.1.1_amd64.deb` from the repository's Releases page:
 
 ```bash
-sudo apt install ./mygdrive-rust_1.0.6_amd64.deb
+sudo apt install ./mygdrive-rust_1.1.1_amd64.deb
 /usr/bin/mygdrive-desktop
 ```
 

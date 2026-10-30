@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.1 — 31 October 2026
+
+- Follow the active system GTK theme across the dashboard, account manager, activity window, setup and offline dialogs. Backgrounds, text, borders, buttons and accents now use the native theme palette and update when the theme changes.
+- Keep GTK's fallback in dark mode for themes such as Mint-L-Dark that only provide GTK3 styles, and restore the light variant when switching back. Default/Adwaita also follow the system appearance preference; custom GTK4 themes retain their own colors.
+- Add an isolated `--theme` preview option for verifying light, dark and custom themes without changing desktop preferences or accessing real Google Drive accounts.
+
 ## v1.1.0 — 28 October 2026
 
 - Manage multiple Google accounts from one desktop window: an avatar menu shows account identities, the selected account and independent sync status. Switching accounts keeps other account services running.
