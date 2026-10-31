@@ -341,5 +341,15 @@
   "Tambahkan akun lain": "Tambahkan akun lain",
   "Tunggu perintah akun selesai sebelum berpindah.": "Tunggu perintah akun selesai sebelum berpindah.",
   "{} akun terhubung": "{} akun terhubung",
-  "Semua layanan akun berhenti dengan tertib.": "Semua layanan akun berhenti dengan tertib."
+  "Semua layanan akun berhenti dengan tertib.": "Semua layanan akun berhenti dengan tertib.",
+  "Login ulang akun Google": "Login ulang akun Google",
+  "Login ulang diperlukan": "Login ulang diperlukan",
+  "Sinkronisasi menunggu login ulang Google": "Sinkronisasi menunggu login ulang Google",
+  "Google meminta login ulang untuk akun ini. Sinkronisasi dengan Drive menunggu sampai login berhasil. File lokal dan pengaturan folder tetap tersimpan. Klik Login ulang akun Google untuk melanjutkan.": "Google meminta login ulang untuk akun ini. Sinkronisasi dengan Drive menunggu sampai login berhasil. File lokal dan pengaturan folder tetap tersimpan. Klik Login ulang akun Google untuk melanjutkan.",
+  "Akun: {}": "Akun: {}",
+  "Login ulang akun Google · MyGdrive Rust": "Login ulang akun Google · MyGdrive Rust",
+  "Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.": "Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.",
+  "Menyiapkan login ulang akun tersimpan…": "Menyiapkan login ulang akun tersimpan…",
+  "Kembali ke dashboard": "Kembali ke dashboard",
+  "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.": "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard."
 }

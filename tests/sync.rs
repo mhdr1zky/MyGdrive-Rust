@@ -28,6 +28,7 @@ struct FakeDrive {
     edit_during_upload: Mutex<Option<(PathBuf, Vec<u8>)>>,
     edit_during_trash: Mutex<Option<(PathBuf, Vec<u8>)>>,
     offline: AtomicBool,
+    auth_required: AtomicBool,
     reject_cursor_once: AtomicBool,
     hold_get: AtomicBool,
     get_entered: tokio::sync::Notify,
@@ -52,6 +53,7 @@ impl FakeDrive {
             edit_during_upload: Mutex::new(None),
             edit_during_trash: Mutex::new(None),
             offline: AtomicBool::new(false),
+            auth_required: AtomicBool::new(false),
             reject_cursor_once: AtomicBool::new(false),
             hold_get: AtomicBool::new(false),
             get_entered: tokio::sync::Notify::new(),
@@ -111,6 +113,9 @@ impl FakeDrive {
         );
     }
     fn check(&self) -> Result<()> {
+        if self.auth_required.load(Ordering::SeqCst) {
+            return Err(Error::AuthRequired);
+        }
         if self.offline.load(Ordering::SeqCst) {
             Err(Error::Http {
                 status: 503,
@@ -2081,6 +2086,54 @@ async fn service_wait(
     })
     .await
     .expect("service state did not converge")
+}
+
+#[tokio::test]
+async fn reauthentication_retries_without_backoff_and_preserves_pause() {
+    use mygdrive_sync::{
+        connectivity::ConnectionState,
+        onboarding,
+        service::{self, Action, Request},
+    };
+    let f = Fixture::new(true);
+    f.drive.auth_required.store(true, Ordering::SeqCst);
+    let task = tokio::spawn(service::run_owned(
+        Arc::new(f.engine().await),
+        f.state.clone(),
+        service_config(&f),
+        true,
+        CancellationToken::new(),
+    ));
+    let initial = service_wait(&f.state, |s| s.paused).await;
+    onboarding::notify_reauthenticated(&f.state).await.unwrap();
+    let paused = service::send(&f.state, &Request::new(Action::Status))
+        .await
+        .unwrap()
+        .status;
+    assert!(paused.paused && !paused.sync_requested);
+    assert_eq!(paused.cycles_finished, 0);
+    service::send(&f.state, &Request::new(Action::Resume))
+        .await
+        .unwrap();
+    let failed = service_wait(&f.state, |s| {
+        !s.cycle_active && s.connection == ConnectionState::AuthRequired
+    })
+    .await;
+    assert_eq!(failed.last_error.as_deref(), Some("auth_required"));
+    f.drive.auth_required.store(false, Ordering::SeqCst);
+    onboarding::notify_reauthenticated(&f.state).await.unwrap();
+    let recovered = service_wait(&f.state, |s| {
+        !s.cycle_active && s.connection == ConnectionState::Online && s.last_error.is_none()
+    })
+    .await;
+    assert_eq!(recovered.session_id, initial.session_id);
+    assert!(recovered.cycles_finished > failed.cycles_finished);
+    service::send(&f.state, &Request::new(Action::Shutdown))
+        .await
+        .unwrap();
+    task.await.unwrap().unwrap();
+    // Login remains valid even when there is no running sync service to notify.
+    assert!(onboarding::notify_reauthenticated(&f.state).await.is_err());
 }
 #[tokio::test]
 async fn folder_emblems_require_inherited_pin_and_all_content_available_before_green() {
@@ -5728,6 +5781,21 @@ async fn tray_health_distinguishes_lost_ui_connection_from_confirmed_sync_errors
     assert!(Model::from_snapshot(&snapshot, false).attention);
     assert_eq!(snapshot.notice(), Some(Notice::AuthRequired));
     assert!(!snapshot.notice().unwrap().description().is_empty());
+    let login_title = mygdrive_sync::i18n::tr("Sinkronisasi menunggu login ulang Google");
+    assert_eq!(snapshot.title(), login_title);
+    snapshot.status.as_mut().unwrap().paused = true;
+    assert_eq!(
+        snapshot.title(),
+        login_title,
+        "pause must not hide the sign-in requirement"
+    );
+    snapshot.status.as_mut().unwrap().paused = false;
+    snapshot.status.as_mut().unwrap().connection = ConnectionState::Online;
+    assert_eq!(
+        snapshot.title(),
+        login_title,
+        "the stored auth error must still be actionable"
+    );
     {
         let s = snapshot.status.as_mut().unwrap();
         s.connection = ConnectionState::Online;
@@ -5737,6 +5805,7 @@ async fn tray_health_distinguishes_lost_ui_connection_from_confirmed_sync_errors
     assert_eq!(snapshot.notice(), Some(Notice::Error));
     assert!(!snapshot.notice().unwrap().description().is_empty());
     snapshot.status.as_mut().unwrap().last_error = None;
+    assert_ne!(snapshot.title(), login_title);
     let model = Model::from_snapshot(&snapshot, false);
     assert!(!model.attention && !model.warning && !model.syncing);
     stop.cancel();

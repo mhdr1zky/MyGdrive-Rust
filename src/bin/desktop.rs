@@ -110,9 +110,12 @@ fn time_text(ms: Option<i64>) -> String {
         .unwrap_or_else(|| tr("Belum ada").into())
 }
 struct Widgets {
+    status_card: gtk::Box,
     title: gtk::Label,
     pill: gtk::Label,
     description: gtk::Label,
+    login_account: gtk::Label,
+    reauthenticate: gtk::Button,
     profile: gtk::Label,
     folder: gtk::Label,
     remote: gtk::Label,
@@ -135,8 +138,28 @@ impl Widgets {
         let active = snapshot.live && status.is_some_and(|s| !s.shutdown_requested);
         let paused = status.is_some_and(|s| s.paused);
         let notice = snapshot.notice();
+        let needs_login = notice == Some(dashboard::Notice::AuthRequired);
+        self.stage.set_visible(!needs_login);
+        if needs_login {
+            self.status_card.add_css_class("auth-required");
+        } else {
+            self.status_card.remove_css_class("auth-required");
+        }
+        self.reauthenticate.set_visible(needs_login);
+        self.reauthenticate.set_sensitive(needs_login && !busy);
+        self.login_account
+            .set_visible(needs_login && snapshot.account.is_some());
+        self.login_account.set_text(
+            &snapshot
+                .account
+                .as_ref()
+                .map(|account| fmt("Akun: {}", &[("0", account.email.clone())]))
+                .unwrap_or_default(),
+        );
         self.pill.set_text(if !snapshot.live {
             tr("Layanan nonaktif")
+        } else if needs_login {
+            tr("Login ulang diperlukan")
         } else if paused {
             tr("Dijeda")
         } else if notice.is_some() {
@@ -167,7 +190,8 @@ impl Widgets {
         self.pause
             .set_label(if paused { tr("Lanjutkan") } else { tr("Jeda") });
         self.pause.set_sensitive(active && !busy);
-        self.sync.set_sensitive(active && !paused && !busy);
+        self.sync
+            .set_sensitive(active && !paused && !busy && !needs_login);
         self.stop.set_sensitive(active && !busy);
         self.start
             .set_sensitive(!snapshot.live && snapshot.configuration().is_some() && !busy);
@@ -175,7 +199,13 @@ impl Widgets {
         self.stop.set_visible(snapshot.live);
         self.pause.set_visible(snapshot.live);
         self.sync.set_visible(snapshot.live);
-        for button in [&self.start, &self.stop, &self.pause, &self.sync] {
+        for button in [
+            &self.reauthenticate,
+            &self.start,
+            &self.stop,
+            &self.pause,
+            &self.sync,
+        ] {
             if let Some(child) = button.parent() {
                 child.set_visible(button.is_visible());
             }
@@ -205,6 +235,8 @@ impl Widgets {
             self.success.set_text(&time_text(s.last_success_ms));
             let stage = if !snapshot.live {
                 tr("Catatan terakhir")
+            } else if needs_login {
+                tr("Sinkronisasi menunggu login ulang Google")
             } else if s.paused {
                 tr("Watcher lokal aktif")
             } else if !s.cycle_active {
@@ -218,7 +250,7 @@ impl Widgets {
                     _ => tr("Menunggu siklus berikutnya"),
                 }
             };
-            if s.progress.inventory_pages > 0 {
+            if s.progress.inventory_pages > 0 && !needs_login {
                 self.stage.set_text(&fmt(
                     "{stage} · {} halaman / {} item inventaris",
                     &[
@@ -230,7 +262,8 @@ impl Widgets {
             } else {
                 self.stage.set_text(stage);
             }
-            self.error.set_visible(s.last_error.is_some());
+            self.error
+                .set_visible(s.last_error.is_some() && !needs_login);
             self.error.set_text(match s.last_error.as_deref() {
                 None => tr("Tidak ada error pada siklus terakhir."),
                 Some("auth_required") => {
@@ -409,10 +442,19 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     let description = label(tr("Mengambil status sinkronisasi."), "subtitle");
     description.set_wrap(true);
     status_card.append(&description);
+    let login_account = label("", "detail");
+    login_account.set_selectable(true);
+    login_account.set_visible(false);
+    status_card.append(&login_account);
     let stage = label(tr("Menunggu status"), "detail");
     stage.set_wrap(true);
     status_card.append(&stage);
     let buttons = flow();
+    let reauthenticate = gtk::Button::with_label(tr("Login ulang akun Google"));
+    reauthenticate.add_css_class("suggested-action");
+    reauthenticate.set_action_name(Some("app.reauthenticate"));
+    reauthenticate.set_visible(false);
+    buttons.insert(&reauthenticate, -1);
     let pause = gtk::Button::with_label(tr("Jeda"));
     let sync = gtk::Button::with_label(tr("Sinkronkan sekarang"));
     sync.add_css_class("suggested-action");
@@ -527,9 +569,12 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         });
     }
     let widgets = Rc::new(Widgets {
+        status_card,
         title,
         pill,
         description,
+        login_account,
+        reauthenticate,
         profile,
         folder,
         remote,
@@ -560,6 +605,18 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         }
     });
     app.add_action(&accounts_action);
+    let reauth_action = gio::SimpleAction::new("reauthenticate", None);
+    let parent = window.downgrade();
+    let account_state = setup_state.clone();
+    let installation_busy = updating.clone();
+    reauth_action.connect_activate(move |_, _| {
+        if !installation_busy.get() {
+            if let Some(parent) = parent.upgrade() {
+                setup::show_reauthentication(&parent, account_state.clone(), snapshot_mode);
+            }
+        }
+    });
+    app.add_action(&reauth_action);
     let progress = Rc::new(progress::Popup::new(&window, snapshot_mode));
     let progress_action = gio::SimpleAction::new_stateful("progress", None, &false.to_variant());
     let popup_button = progress.clone();
@@ -747,6 +804,7 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         }
         for name in [
             "accounts",
+            "reauthenticate",
             "select-account",
             "open-profile",
             "progress",
@@ -1333,6 +1391,131 @@ mod account_ui_tests {
             child = widget.next_sibling();
         }
         false
+    }
+    fn find_button(widget: &gtk::Widget, caption: &str) -> Option<gtk::Button> {
+        if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+            if button.label().as_deref() == Some(caption) && button.is_mapped() {
+                return Some(button.clone());
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            if let Some(button) = find_button(&widget, caption) {
+                return Some(button);
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+    #[test]
+    #[ignore = "requires the synthetic auth-required service; use capture-previews.py --auth-required --ui-test-binary"]
+    fn login_required_actions_open_the_selected_account() {
+        let state =
+            PathBuf::from(std::env::var_os("MYGDRIVE_AUTH_TEST_STATE").expect("synthetic profile"));
+        let temp = tempfile::tempdir().unwrap();
+        mygdrive_sync::i18n::initialize(Some("id"));
+        gtk::init().unwrap();
+        let app = gtk::Application::builder()
+            .application_id("io.mygdrive.AuthUiTest")
+            .flags(gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        build(
+            &app,
+            BuildRequest {
+                state,
+                snapshot_path: Some(temp.path().join("unused.png")),
+                dialogs: (false, false, false, false, false),
+                background: false,
+                start_service: false,
+                language: "id".into(),
+            },
+            None,
+        );
+        let window = app
+            .windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<gtk::ApplicationWindow>().ok())
+            .unwrap();
+        pump_until(|| has_label(window.upcast_ref(), tr("Login ulang diperlukan")));
+        assert!(has_label(
+            window.upcast_ref(),
+            tr("Sinkronisasi menunggu login ulang Google")
+        ));
+        let login = find_button(window.upcast_ref(), tr("Login ulang akun Google")).unwrap();
+        assert_eq!(login.action_name().as_deref(), Some("app.reauthenticate"));
+        assert!(login.is_sensitive());
+        assert!(!find_button(window.upcast_ref(), tr("Sinkronkan sekarang"))
+            .unwrap()
+            .is_sensitive());
+        login.emit_clicked();
+        let dialog_title = tr("Login ulang akun Google · MyGdrive Rust");
+        pump_until(|| {
+            app.windows()
+                .iter()
+                .any(|window| window.title().as_deref() == Some(dialog_title))
+        });
+        let dialog = app
+            .windows()
+            .into_iter()
+            .find(|window| window.title().as_deref() == Some(dialog_title))
+            .unwrap();
+        pump_until(|| {
+            has_label(
+                dialog.upcast_ref(),
+                "✓ Akun Google Drive: alya@example.test",
+            )
+        });
+        assert!(find_button(dialog.upcast_ref(), tr("Login ulang akun Google")).is_some());
+        assert!(find_button(dialog.upcast_ref(), tr("Pilih folder lokal kosong…")).is_none());
+        assert!(find_button(dialog.upcast_ref(), tr("Hubungkan akun baru…")).is_none());
+        if let Some(path) = std::env::var_os("MYGDRIVE_REAUTH_PREVIEW") {
+            let paintable = gtk::WidgetPaintable::new(Some(&dialog));
+            let snapshot = gtk::Snapshot::new();
+            paintable.snapshot(&snapshot, dialog.width() as f64, dialog.height() as f64);
+            dialog
+                .renderer()
+                .unwrap()
+                .render_texture(snapshot.to_node().unwrap(), None)
+                .save_to_png(PathBuf::from(path))
+                .unwrap();
+        }
+        dialog.close();
+        app.activate_action("accounts", None);
+        pump_until(|| {
+            app.windows()
+                .iter()
+                .any(|window| window.title().as_deref() == Some(tr("Kelola akun · MyGdrive Rust")))
+        });
+        let manager = app
+            .windows()
+            .into_iter()
+            .find(|window| window.title().as_deref() == Some(tr("Kelola akun · MyGdrive Rust")))
+            .unwrap();
+        pump_until(|| find_button(manager.upcast_ref(), tr("Login ulang akun Google")).is_some());
+        find_button(manager.upcast_ref(), tr("Login ulang akun Google"))
+            .unwrap()
+            .emit_clicked();
+        pump_until(|| {
+            app.windows()
+                .iter()
+                .any(|window| window.title().as_deref() == Some(dialog_title))
+        });
+        let dialog = app
+            .windows()
+            .into_iter()
+            .find(|window| window.title().as_deref() == Some(dialog_title))
+            .unwrap();
+        pump_until(|| {
+            has_label(
+                dialog.upcast_ref(),
+                "✓ Akun Google Drive: alya@example.test",
+            )
+        });
+        for window in app.windows() {
+            window.destroy();
+        }
+        app.quit();
     }
     #[test]
     #[ignore = "requires a dedicated GTK display; use capture-previews.py --ui-test-binary"]

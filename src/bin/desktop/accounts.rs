@@ -69,6 +69,12 @@ impl Ui {
             setup::show_managed(&parent, state, self.preview, Some(self.select.clone()), add);
         }
     }
+    fn reauthenticate(&self, state: PathBuf) {
+        self.popover.popdown();
+        if let Some(parent) = self.parent.upgrade() {
+            setup::show_reauthentication(&parent, state, self.preview);
+        }
+    }
     fn render(self: &Rc<Self>, accounts: Vec<Account>) {
         self.busy.set(false);
         let signature = format!(
@@ -187,7 +193,8 @@ impl Ui {
             identity.append(&email);
             heading.append(&identity);
             let status = label(account.status(), "pill");
-            if account.signed_out || !account.snapshot.live {
+            let needs_login = account.snapshot.notice() == Some(dashboard::Notice::AuthRequired);
+            if account.signed_out || !account.snapshot.live || needs_login {
                 status.add_css_class("warning");
             }
             heading.append(&status);
@@ -217,17 +224,21 @@ impl Ui {
                 }
             });
             actions.insert(&open, -1);
-            if account.signed_out {
-                let reconnect = gtk::Button::with_label(tr("Hubungkan kembali"));
+            if account.configured || account.signed_out {
+                let reconnect = gtk::Button::with_label(tr("Login ulang akun Google"));
+                if account.signed_out || needs_login {
+                    reconnect.add_css_class("suggested-action");
+                }
                 let state = account.state.clone();
                 let weak = Rc::downgrade(self);
                 reconnect.connect_clicked(move |_| {
                     if let Some(ui) = weak.upgrade() {
-                        ui.setup(state.clone(), false);
+                        ui.reauthenticate(state.clone());
                     }
                 });
                 actions.insert(&reconnect, -1);
-            } else if account.configured {
+            }
+            if !account.signed_out && account.configured {
                 let paused = account.snapshot.status.as_ref().is_some_and(|s| s.paused);
                 let (caption, command) = if !account.snapshot.live {
                     (tr("Mulai service"), dashboard::Command::Start)

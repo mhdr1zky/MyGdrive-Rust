@@ -20,7 +20,11 @@ mygdrive-desktop --state /path/to/collection --accounts
 
 Choose **Disconnect account** and confirm the selected email. The application requests a graceful shutdown and waits for that profile's writer lock before removing local login tokens and disabling its login autostart entry. If shutdown cannot be confirmed, credentials stay in place. Local files, pending journals, recovery copies, cloud files and other accounts are retained. This does not revoke the Google application's grant, which could affect other profiles using that registration.
 
-A disconnected account remains listed so its original folder reservation and identity are visible. Choose **Reconnect**, then **Sign in again to selected account**, and use the same Google account. The retained permission ID prevents a different Google user from taking over existing profile state. To connect a different user, use **Add another account** and a separate folder.
+A disconnected account remains listed so its original folder reservation and identity are visible. Choose **Sign in to Google again** and complete browser sign-in with the same Google account. The retained permission ID prevents a different Google user from taking over existing profile state. To connect a different user, use **Add another account** and a separate folder.
+
+When Google requires authentication again, the dashboard shows an explicit warning, the affected account and a prominent **Sign in to Google again** button. The activity window offers the same action, and each configured account keeps a sign-in button in **Manage accounts**. This opens the existing account's browser sign-in flow directly; choosing folders or adding another account is unnecessary. Local files and folder settings are retained. A paused service stays paused.
+
+Successful re-login immediately requests a retry from the running service instead of waiting for its authentication backoff timer. The dashboard clears the warning when that retry confirms Drive access. A stopped service is not started by re-login.
 
 ## Quit and updates
 

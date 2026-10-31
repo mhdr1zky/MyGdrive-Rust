@@ -341,5 +341,15 @@
   "Tambahkan akun lain": "添加其他账号",
   "Tunggu perintah akun selesai sebelum berpindah.": "请等待账号操作完成后再切换。",
   "{} akun terhubung": "已连接 {} 个账号",
-  "Semua layanan akun berhenti dengan tertib.": "所有账号服务已安全停止。"
+  "Semua layanan akun berhenti dengan tertib.": "所有账号服务已安全停止。",
+  "Login ulang akun Google": "重新登录 Google 帐号",
+  "Login ulang diperlukan": "需要重新登录",
+  "Sinkronisasi menunggu login ulang Google": "同步正在等待重新登录 Google",
+  "Google meminta login ulang untuk akun ini. Sinkronisasi dengan Drive menunggu sampai login berhasil. File lokal dan pengaturan folder tetap tersimpan. Klik Login ulang akun Google untuk melanjutkan.": "Google 要求此帐号重新登录。登录成功后才能继续与 Drive 同步。本地文件和文件夹设置均已保留。点击“重新登录 Google 帐号”以继续。",
+  "Akun: {}": "帐号：{}",
+  "Login ulang akun Google · MyGdrive Rust": "重新登录 Google 帐号 · MyGdrive Rust",
+  "Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.": "请在浏览器中使用同一个 Google 帐号完成登录。本地文件及文件夹配对均已保留。",
+  "Menyiapkan login ulang akun tersimpan…": "正在准备重新登录已保存的帐号…",
+  "Kembali ke dashboard": "返回仪表盘",
+  "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.": "重新登录成功。帐号和文件夹均已保留。您可以返回仪表盘。"
 }

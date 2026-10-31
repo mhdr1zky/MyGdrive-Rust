@@ -9,6 +9,8 @@ use std::{
 
 pub struct Popup {
     pub window: gtk::Window,
+    health: gtk::Box,
+    reauthenticate: gtk::Button,
     status: gtk::Label,
     summary: gtk::Label,
     bar: gtk::ProgressBar,
@@ -46,6 +48,11 @@ impl Popup {
         health.append(&summary);
         let bar = gtk::ProgressBar::new();
         health.append(&bar);
+        let reauthenticate = gtk::Button::with_label(tr("Login ulang akun Google"));
+        reauthenticate.add_css_class("suggested-action");
+        reauthenticate.set_action_name(Some("app.reauthenticate"));
+        reauthenticate.set_visible(false);
+        health.append(&reauthenticate);
         content.append(&health);
         content.append(&label(tr("AKTIVITAS FILE TERBARU"), "eyebrow"));
         let list = column(8);
@@ -78,6 +85,8 @@ impl Popup {
         window.set_child(Some(&content));
         Self {
             window,
+            health,
+            reauthenticate,
             status,
             summary,
             bar,
@@ -100,7 +109,15 @@ impl Popup {
     }
     /// Update service health even when the database activity list cannot be read.
     pub fn refresh_status(&self, snapshot: &Snapshot) {
-        let active = snapshot.live
+        let needs_login = snapshot.notice() == Some(mygdrive_sync::dashboard::Notice::AuthRequired);
+        self.reauthenticate.set_visible(needs_login);
+        if needs_login {
+            self.health.add_css_class("auth-required");
+        } else {
+            self.health.remove_css_class("auth-required");
+        }
+        let active = !needs_login
+            && snapshot.live
             && snapshot
                 .status
                 .as_ref()

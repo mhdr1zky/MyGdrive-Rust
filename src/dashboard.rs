@@ -44,7 +44,7 @@ impl Notice {
         match self {
             Self::Reconnecting=>tr("Antarmuka belum terhubung ke layanan. Riwayat selesai tetap tersimpan; status sedang diperiksa ulang."),
             Self::Offline=>tr("Koneksi Drive terputus. Perubahan tetap tersimpan dan akan dicoba ulang otomatis."),
-            Self::AuthRequired=>tr("Izin Google perlu diperbarui. Buka Akun dan folder → Login ulang akun terpilih."),
+            Self::AuthRequired=>tr("Google meminta login ulang untuk akun ini. Sinkronisasi dengan Drive menunggu sampai login berhasil. File lokal dan pengaturan folder tetap tersimpan. Klik Login ulang akun Google untuk melanjutkan."),
             Self::Throttled=>tr("Drive membatasi permintaan. Aplikasi menunggu sebelum mencoba lagi."),
             Self::Error=>tr("Layanan melaporkan kesalahan sinkronisasi. Riwayat unggahan selesai di bawah bukan status seluruh layanan; periksa operasi tertunda dan dashboard."),
             Self::Stopped=>tr("Layanan tidak aktif atau sedang berhenti. Riwayat di bawah adalah hasil operasi sebelumnya."),
@@ -91,6 +91,8 @@ impl Snapshot {
         };
         if s.shutdown_requested {
             tr("Sedang berhenti")
+        } else if self.notice() == Some(Notice::AuthRequired) {
+            tr("Sinkronisasi menunggu login ulang Google")
         } else if s.paused && s.cycle_active {
             tr("Menunggu jeda")
         } else if s.paused {

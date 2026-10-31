@@ -341,5 +341,15 @@
   "Tambahkan akun lain": "Add another account",
   "Tunggu perintah akun selesai sebelum berpindah.": "Wait for the account action to finish before switching.",
   "{} akun terhubung": "{} accounts connected",
-  "Semua layanan akun berhenti dengan tertib.": "All account services stopped safely."
+  "Semua layanan akun berhenti dengan tertib.": "All account services stopped safely.",
+  "Login ulang akun Google": "Sign in to Google again",
+  "Login ulang diperlukan": "Sign-in required",
+  "Sinkronisasi menunggu login ulang Google": "Sync is waiting for Google sign-in",
+  "Google meminta login ulang untuk akun ini. Sinkronisasi dengan Drive menunggu sampai login berhasil. File lokal dan pengaturan folder tetap tersimpan. Klik Login ulang akun Google untuk melanjutkan.": "Google requires this account to sign in again. Drive sync is waiting for sign-in to succeed. Your local files and folder settings are retained. Click Sign in to Google again to continue.",
+  "Akun: {}": "Account: {}",
+  "Login ulang akun Google · MyGdrive Rust": "Sign in to Google again · MyGdrive Rust",
+  "Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.": "Finish signing in in your browser with the same Google account. Your local files and folder pair are retained.",
+  "Menyiapkan login ulang akun tersimpan…": "Preparing to sign in to the saved account…",
+  "Kembali ke dashboard": "Back to dashboard",
+  "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.": "Sign-in succeeded. Your account and folders are retained. You can return to the dashboard."
 }

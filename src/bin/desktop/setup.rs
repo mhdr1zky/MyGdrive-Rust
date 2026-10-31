@@ -187,6 +187,26 @@ pub fn show_managed(
     select: Option<super::accounts::Select>,
     add_account: bool,
 ) -> gtk::Window {
+    show_mode(parent, current, snapshot_mode, select, add_account, false)
+}
+
+/// Reuse the existing account binding and OAuth flow without exposing folder setup.
+pub fn show_reauthentication(
+    parent: &gtk::ApplicationWindow,
+    current: PathBuf,
+    snapshot_mode: bool,
+) -> gtk::Window {
+    show_mode(parent, current, snapshot_mode, None, false, true)
+}
+
+fn show_mode(
+    parent: &gtk::ApplicationWindow,
+    current: PathBuf,
+    snapshot_mode: bool,
+    select: Option<super::accounts::Select>,
+    add_account: bool,
+    reauth_only: bool,
+) -> gtk::Window {
     let base = if current
         .parent()
         .and_then(|p| p.file_name())
@@ -201,21 +221,36 @@ pub fn show_managed(
         current.clone()
     };
     let window = gtk::Window::builder()
-        .title(tr("Akun dan folder · MyGdrive Rust"))
+        .title(if reauth_only {
+            tr("Login ulang akun Google · MyGdrive Rust")
+        } else {
+            tr("Akun dan folder · MyGdrive Rust")
+        })
         .transient_for(parent)
         .modal(true)
         .default_width(690)
-        .default_height(690)
+        .default_height(if reauth_only { 400 } else { 690 })
         .build();
     window.set_application(parent.application().as_ref());
     window.set_destroy_with_parent(true);
     let content = column(8);
     content.add_css_class("content");
-    let heading = label(tr("Akun dan folder"), "title");
+    let heading = label(
+        if reauth_only {
+            tr("Login ulang akun Google")
+        } else {
+            tr("Akun dan folder")
+        },
+        "title",
+    );
     heading.set_focusable(true);
     content.append(&heading);
     let intro = label(
-        tr("Hubungkan akun Google dan tentukan folder yang ingin Anda sinkronkan."),
+        if reauth_only {
+            tr("Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.")
+        } else {
+            tr("Hubungkan akun Google dan tentukan folder yang ingin Anda sinkronkan.")
+        },
         "subtitle",
     );
     intro.set_wrap(true);
@@ -227,12 +262,23 @@ pub fn show_managed(
         gtk::Expander::new(Some(tr("Akun tersimpan — pilih untuk melihat folder")));
     profiles_expander.set_child(Some(&profiles_box));
     profiles_expander.set_expanded(true);
+    profiles_expander.set_visible(!reauth_only);
     account_card.append(&profiles_expander);
     let login_row = flow();
     let login = gtk::Button::with_label(tr("Hubungkan akun baru…"));
     login.add_css_class("suggested-action");
-    let reauth = gtk::Button::with_label(tr("Login ulang akun terpilih"));
-    login_row.insert(&login, -1);
+    login.set_visible(!reauth_only);
+    let reauth = gtk::Button::with_label(if reauth_only {
+        tr("Login ulang akun Google")
+    } else {
+        tr("Login ulang akun terpilih")
+    });
+    if reauth_only {
+        reauth.add_css_class("suggested-action");
+    }
+    if !reauth_only {
+        login_row.insert(&login, -1);
+    }
     login_row.insert(&reauth, -1);
     account_card.append(&login_row);
     let account = label(tr("Memeriksa akun tersimpan…"), "detail");
@@ -279,6 +325,7 @@ pub fn show_managed(
     hint.set_wrap(true);
     drive_card.append(&hint);
     content.append(&drive_card);
+    drive_card.set_visible(!reauth_only);
     let local_card = card();
     local_card.append(&label(tr("2 · FOLDER LOKAL"), "eyebrow"));
     let local = label(tr("Belum dipilih"), "detail");
@@ -288,8 +335,13 @@ pub fn show_managed(
     choose_button.set_halign(gtk::Align::Start);
     local_card.append(&choose_button);
     content.append(&local_card);
+    local_card.set_visible(!reauth_only);
     let feedback = label(
-        tr("Profil baru tidak mengganti folder yang sedang tersinkron."),
+        if reauth_only {
+            tr("Menyiapkan login ulang akun tersimpan…")
+        } else {
+            tr("Profil baru tidak mengganti folder yang sedang tersinkron.")
+        },
         "subtitle",
     );
     feedback.set_wrap(true);
@@ -297,6 +349,21 @@ pub fn show_managed(
     let save = gtk::Button::with_label(tr("Simpan dan buka dashboard profil"));
     save.add_css_class("suggested-action");
     content.append(&save);
+    save.set_visible(!reauth_only);
+    if reauth_only {
+        let back = gtk::Button::with_label(tr("Kembali ke dashboard"));
+        let weak = window.downgrade();
+        let parent = parent.downgrade();
+        back.connect_clicked(move |_| {
+            if let Some(window) = weak.upgrade() {
+                window.close();
+            }
+            if let Some(parent) = parent.upgrade() {
+                parent.present();
+            }
+        });
+        content.append(&back);
+    }
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&content)
@@ -424,6 +491,7 @@ pub fn show_managed(
     let for_destroy = ui.clone();
     window.connect_destroy(move |_| for_destroy.worker.stop());
     let mut add_pending = add_account && !snapshot_mode;
+    let mut reauth_pending = reauth_only && !snapshot_mode;
     glib::timeout_add_local(Duration::from_millis(100), move || {
         if weak_window.upgrade().is_none() {
             ui.worker.stop();
@@ -451,7 +519,10 @@ pub fn show_managed(
                     }
                     ui.feedback.set_text(tr("Akun diputuskan dari perangkat ini. Gunakan Hubungkan kembali dengan akun Google yang sama."));
                     ui.update();
-                    if add_pending {
+                    if reauth_pending {
+                        reauth_pending = false;
+                        ui.reauth.emit_clicked();
+                    } else if add_pending {
                         add_pending = false;
                         ui.login.emit_clicked();
                     }
@@ -537,7 +608,19 @@ pub fn show_managed(
                         ui.local.set_text(tr("Belum dipilih"));
                         *ui.root.borrow_mut() = None;
                     }
-                    if add_pending {
+                    if reauth_pending {
+                        reauth_pending = false;
+                        ui.update();
+                        ui.reauth.emit_clicked();
+                    } else if reauth_only {
+                        ui.feedback.set_text(if snapshot_mode {
+                            tr("Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.")
+                        } else {
+                            tr("Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.")
+                        });
+                        ui.reauth.set_visible(snapshot_mode);
+                        ui.update();
+                    } else if add_pending {
                         add_pending = false;
                         ui.update();
                         ui.login.emit_clicked();
@@ -578,6 +661,10 @@ pub fn show_managed(
                     ui.logged.set(false);
                     ui.feedback.set_text(tr("Login Google diperlukan kembali. Gunakan Login ulang akun terpilih; akun tersimpan tidak dihapus."));
                     ui.update();
+                    if reauth_pending {
+                        reauth_pending = false;
+                        ui.reauth.emit_clicked();
+                    }
                 }
                 Ok(Event::Error(message)) => {
                     ui.busy.set(false);

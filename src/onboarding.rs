@@ -1,4 +1,4 @@
-//! Graphical setup backend. New pairs are isolated; setup never starts a sync cycle.
+//! Graphical setup backend. New pairs are isolated; re-login wakes existing sync.
 use crate::i18n::{fmt, tr};
 use crate::{
     drive::AccessTokenProvider,
@@ -401,6 +401,27 @@ async fn connected(state: &Path) -> Result<Event> {
         folder,
     })
 }
+/// Wake the existing service after successful re-login, preserving an explicit pause.
+/// Service health remains authoritative until the next sync has actually succeeded.
+pub async fn notify_reauthenticated(state: &Path) -> Result<()> {
+    use service::{Action, Request};
+    let reply = service::send(state, &Request::new(Action::Status)).await?;
+    if !reply.accepted
+        || !reply.status.running
+        || reply.status.shutdown_requested
+        || reply.status.paused
+    {
+        return Ok(());
+    }
+    let mut request = Request::new(Action::SyncNow);
+    request.session_id = Some(reply.status.session_id);
+    let reply = service::send(state, &request).await?;
+    if !reply.accepted {
+        return Err(Error::Invalid("service rejected post-login sync".into()));
+    }
+    Ok(())
+}
+
 async fn execute(base: &Path, state: &mut PathBuf, command: Command) -> Result<Event> {
     match command {
         Command::AddAccount => {
@@ -444,6 +465,9 @@ async fn execute(base: &Path, state: &mut PathBuf, command: Command) -> Result<E
                 .map(|c| c.account)
                 .unwrap_or_else(|_| "default".into());
             oauth::login_desktop(None, &oauth::token_path(state, &account)).await?;
+            // Tokens are already saved. A stopped service or concurrent pause
+            // must not turn a successful Google login into a login failure.
+            let _ = notify_reauthenticated(state).await;
             connected(state).await
         }
         Command::UseAccount(target) => {

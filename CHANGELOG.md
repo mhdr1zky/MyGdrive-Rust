@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.2 — 31 October 2026
+
+- Immediately ask the existing service to retry after a successful Google re-login, instead of leaving the dashboard's login warning until the retry timer expires. Preserve explicit pauses and clear health warnings only after a verified sync result.
+- Show a prominent sign-in-required warning, affected account and direct **Sign in to Google again** action on the dashboard. Keep authentication failures visible even when sync is paused, and disable sync-now until sign-in is restored.
+- Make the same action easy to find in account management and tray activity. Open a focused browser sign-in flow for the selected profile, preserving its account binding, local files and folder pair.
+
 ## v1.1.1 — 31 October 2026
 
 - Follow the active system GTK theme across the dashboard, account manager, activity window, setup and offline dialogs. Backgrounds, text, borders, buttons and accents now use the native theme palette and update when the theme changes.

@@ -49,6 +49,7 @@ class Demo:
         self.files, self.remotes, self.paths = {}, {}, {}
         self.activity = False
         self.paused = False
+        self.auth_required = False
         self.folder("documents", "Dokumen", "root")
         self.folder("photos", "Foto dan aset", "root")
         self.folder("project", "Arsip tim", "root")
@@ -121,14 +122,14 @@ class Demo:
         now = int(time.time()*1000)
         return dict(version=1, session_id="synthetic-demo", pid=os.getpid(), running=True,
                     started_at_ms=now-600000, heartbeat_at_ms=now, stopped_at_ms=None, config=self.config,
-                    phase="syncing" if self.activity else "idle", connection="online", paused=self.paused,
+                    phase="syncing" if self.activity else "idle", connection="auth_required" if self.auth_required else "online", paused=self.paused,
                     cycle_active=self.activity, sync_requested=False, shutdown_requested=False,
                     local_watcher_active=True, last_sync_started_ms=now-1000, last_sync_finished_ms=now-5000,
                     last_success_ms=now-5000, cycles_finished=24, pending_operations=1 if self.activity else 0,
                     pending_files=1 if self.activity else 0,
                     progress=dict(stage="reconciling", inventory_pages=1, inventory_items=len(self.remotes),
                                   active_operations=1 if self.activity else 0, last_activity_ms=now if self.activity else 0),
-                    last_report=dict(completed=3, conflicts=0, deferred=0, errors=[]), last_error=None)
+                    last_report=dict(completed=3, conflicts=0, deferred=0, errors=[]), last_error="auth_required" if self.auth_required else None)
 
     def node(self, ident):
         folder = ident == "root" or self.remotes[ident]["mimeType"].endswith(".folder")
@@ -220,11 +221,13 @@ def capture(args):
     with tempfile.TemporaryDirectory(prefix="mygdrive-previews-") as temp:
         directory = Path(temp)
         demo = Demo(directory)
+        demo.auth_required = args.auth_required
         extra_demos = []
         if args.accounts_only:
             extra_demos = [Demo(directory / "work", demo.state / "profiles/work"),
                            Demo(directory / "archive", demo.state / "profiles/archive")]
             extra_demos[0].paused = True
+        if args.accounts_only or args.auth_required:
             for index, (account, name, email) in enumerate(zip([demo, *extra_demos],
                     ["Alya Putri", "Tim Produk", "Arsip Pribadi"],
                     ["alya@example.test", "produk@example.test", "arsip@example.test"])):
@@ -235,11 +238,12 @@ def capture(args):
                     scope="https://www.googleapis.com/auth/drive", drive_user_id=f"synthetic-{index}",
                     identity=dict(email=email, display_name=name))))
                 token.chmod(0o600)
-            token = extra_demos[1].state / "oauth/2a97516c354b68848cdbd8f54a226a0a55b21ed138e207ad6c5cbb9c00aa5aea.json"
-            registration = json.loads(token.read_text())
-            token.with_suffix(".client.json").write_text(dump({key: registration[key] for key in ["client", "drive_user_id", "identity"]}))
-            token.with_suffix(".client.json").chmod(0o600)
-            token.unlink()
+            if args.accounts_only:
+                token = extra_demos[1].state / "oauth/2a97516c354b68848cdbd8f54a226a0a55b21ed138e207ad6c5cbb9c00aa5aea.json"
+                registration = json.loads(token.read_text())
+                token.with_suffix(".client.json").write_text(dump({key: registration[key] for key in ["client", "drive_user_id", "identity"]}))
+                token.with_suffix(".client.json").chmod(0o600)
+                token.unlink()
         env = os.environ.copy()
         for name, folder in [("XDG_CONFIG_HOME", "config"), ("XDG_DATA_HOME", "data"), ("XDG_CACHE_HOME", "cache"), ("XDG_RUNTIME_DIR", "runtime")]:
             path = directory / folder
@@ -328,8 +332,13 @@ def capture(args):
                     raise RuntimeError(f"Missing application snapshot {filename}")
 
             if args.ui_test_binary:
-                for test in ["account_ui_tests::switching_accounts_reuses_window_and_replaces_profile_observers",
-                             "settings::tests::dashboard_discovers_new_json_without_restart_and_saves_its_selection"]:
+                ui_tests = ["account_ui_tests::switching_accounts_reuses_window_and_replaces_profile_observers",
+                            "settings::tests::dashboard_discovers_new_json_without_restart_and_saves_its_selection"]
+                if args.auth_required:
+                    env["MYGDRIVE_AUTH_TEST_STATE"] = str(demo.state)
+                    env["MYGDRIVE_REAUTH_PREVIEW"] = str(OUT / "login-required-dialog.png")
+                    ui_tests.append("account_ui_tests::login_required_actions_open_the_selected_account")
+                for test in ui_tests:
                     subprocess.run([str(Path(args.ui_test_binary).resolve()), "--ignored", "--exact", test, "--nocapture"],
                                    env=env, check=True, timeout=60)
             if args.ipc_check:
@@ -362,6 +371,12 @@ def capture(args):
                 finally:
                     primary.terminate()
                     primary.wait(timeout=10)
+            if args.auth_required:
+                render("login-required-dashboard.png", [], "MyGdrive Rust")
+                render("login-required-activity.png", ["--progress"], "Aktivitas sinkronisasi")
+                render("login-required-accounts.png", ["--accounts"], "Kelola akun")
+                print("Sign-in required previews captured:", OUT)
+                return
             if args.accounts_only:
                 render("multi-account-dashboard.png", [], "MyGdrive Rust")
                 render("multi-account-manager.png", ["--accounts"], "Kelola akun")
@@ -462,6 +477,7 @@ if __name__ == "__main__":
     parser.add_argument("--gtk-only", action="store_true", help="Skip the native FUSE/Thunar capture")
     parser.add_argument("--theme", help="Use a GTK theme inside the isolated preview session")
     parser.add_argument("--accounts-only", action="store_true", help="Render three synthetic accounts: running, paused and signed out")
+    parser.add_argument("--auth-required", action="store_true", help="Render sign-in required notices and actions with a synthetic account")
     parser.add_argument("--ipc-check", action="store_true", help="Verify foreground/background profile launches share one desktop")
     parser.add_argument("--ui-test-binary", help="Run the isolated GTK account switching test executable")
     parser.add_argument("--maintenance-only", action="store_true", help="Render only storage/recovery with synthetic review and quota issues")

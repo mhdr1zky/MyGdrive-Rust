@@ -25,6 +25,7 @@ window { background: @theme_bg_color; color: @theme_fg_color; font-family: Sans;
 .subtitle { color: @app_muted; font-size: 13px; }
 .card { background: @theme_base_color; color: @theme_text_color; border: 1px solid @app_border; border-radius: 16px; padding: 18px; }
 .hero { background: @app_accent_surface; border-color: alpha(@theme_selected_bg_color, 0.30); }
+.hero.auth-required { background: mix(@theme_base_color, #e5a832, 0.12); border-color: alpha(#e5a832, 0.65); }
 .status-title { font-size: 21px; font-weight: 700; }
 .value { font-size: 30px; font-weight: 800; color: @app_accent; }
 .detail { font-size: 14px; }
