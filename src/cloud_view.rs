@@ -74,6 +74,13 @@ impl View {
             .iter()
             .map(|f| (f.relative_path.as_str(), f))
             .collect();
+        let materialized_directories: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
+            "SELECT remote_id,relative_path FROM materialized_directories WHERE remote_id IS NOT NULL",
+        )
+        .fetch_all(&db.pool)
+        .await?
+        .into_iter()
+        .collect();
         let mut entries = BTreeMap::new();
         let mut present = HashSet::new();
         entries.insert(
@@ -91,6 +98,17 @@ impl View {
             let Some(projected) = paths.get(&remote.id) else {
                 continue;
             };
+            // As with materialized files, a missing tracked directory is a
+            // pending local deletion, even before the watcher records it.
+            // Reintroducing its cloud placeholder during recursive removal
+            // makes the parent spuriously nonempty until the next sync.
+            // Never infer deletion for folders that were only cloud metadata.
+            if remote.folder()
+                && materialized_directories.get(&remote.id) == Some(projected)
+                && !local::safe_path(&root, projected)?.try_exists()?
+            {
+                continue;
+            }
             let file = by_remote.get(remote.id.as_str()).copied();
             if file.is_some_and(|f| f.status == "tombstone") {
                 continue;

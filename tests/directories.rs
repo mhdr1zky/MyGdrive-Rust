@@ -235,6 +235,116 @@ async fn empty_directory_create_rename_trash_roundtrip() {
 }
 
 #[tokio::test]
+async fn offline_tree_deletion_does_not_resurrect_folders_before_cloud_sync() {
+    use mygdrive_sync::cloud_view::View;
+
+    let f = Fixture::new().await;
+    std::fs::create_dir_all(f.root.join("offline/nested/deeper")).unwrap();
+    std::fs::write(
+        f.root.join("offline/nested/deeper/file.txt"),
+        b"offline bytes",
+    )
+    .unwrap();
+    f.sync().await;
+    let ids: Vec<_> = ["offline", "nested", "deeper", "file.txt"]
+        .iter()
+        .map(|name| f.drive.by_name(name).id)
+        .collect();
+    f.engine
+        .offline_select(
+            &uuid::Uuid::new_v4().to_string(),
+            &format!("r:{}", ids[0]),
+            true,
+        )
+        .await
+        .unwrap();
+    f.sync().await;
+
+    // Recursive file-manager deletion removes children first. A namespace
+    // refresh can occur between any two syscalls, before the watcher scans or
+    // the service can reach Drive.
+    std::fs::remove_file(f.root.join("offline/nested/deeper/file.txt")).unwrap();
+    for path in ["offline/nested/deeper", "offline/nested", "offline"] {
+        let view = View::load(&f.engine.db).await.unwrap();
+        let prefix = format!("{path}/");
+        assert!(
+            !view.entries.keys().any(|p| p.starts_with(&prefix)),
+            "deleted children reappeared under {path}"
+        );
+        std::fs::remove_dir(f.root.join(path)).unwrap();
+        let view = View::load(&f.engine.db).await.unwrap();
+        assert!(
+            !view.entries.contains_key(path),
+            "deleted folder reappeared: {path}"
+        );
+    }
+    f.engine.scanner.scan().await.unwrap();
+    assert!(!View::load(&f.engine.db)
+        .await
+        .unwrap()
+        .entries
+        .contains_key("offline"));
+    // The cloud deletion is queued until synchronization resumes.
+    for id in &ids {
+        assert!(!f.drive.get(id).await.unwrap().unwrap().trashed);
+    }
+    f.sync().await;
+    for id in &ids {
+        assert!(f.drive.get(id).await.unwrap().unwrap().trashed);
+    }
+    assert!(
+        !f.root.join("offline").exists(),
+        "pin recreated a deleted tree"
+    );
+}
+
+#[tokio::test]
+async fn deleted_directory_projection_preserves_cloud_only_and_new_children() {
+    use mygdrive_sync::cloud_view::View;
+
+    let f = Fixture::new().await;
+    f.drive.folder("cloud-only", "cloud-only", "root");
+    std::fs::create_dir(f.root.join("offline")).unwrap();
+    f.sync().await;
+    let folder = f.drive.by_name("offline");
+    let view = View::load(&f.engine.db).await.unwrap();
+    assert!(view.entries.contains_key("cloud-only"));
+    assert!(!f.root.join("cloud-only").exists());
+
+    std::fs::remove_dir(f.root.join("offline")).unwrap();
+    assert!(!View::load(&f.engine.db)
+        .await
+        .unwrap()
+        .entries
+        .contains_key("offline"));
+    // Recreating the local directory must make it visible again immediately.
+    std::fs::create_dir(f.root.join("offline")).unwrap();
+    assert!(View::load(&f.engine.db)
+        .await
+        .unwrap()
+        .entries
+        .contains_key("offline"));
+    std::fs::remove_dir(f.root.join("offline")).unwrap();
+
+    // A new cloud child must remain visible, with its parent synthesized. It
+    // must not disappear under a locally removed ancestor or be trashed with it.
+    f.drive.folder("new-child", "new-child", &folder.id);
+    f.engine
+        .db
+        .remote_page(
+            &[f.drive.get("new-child").await.unwrap().unwrap()],
+            "changes",
+            "new-child",
+        )
+        .await
+        .unwrap();
+    let view = View::load(&f.engine.db).await.unwrap();
+    assert!(view.entries.contains_key("offline/new-child"));
+    assert!(view.entries.contains_key("offline"));
+    assert!(view.entries.contains_key("cloud-only"));
+}
+
+#[tokio::test]
 async fn nested_folder_rename_keeps_dirty_file_and_cloud_identity() {
     let f = Fixture::new().await;
     std::fs::create_dir_all(f.root.join("a/nested")).unwrap();

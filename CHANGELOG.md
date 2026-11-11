@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.1.3 — 12 November 2026
+
+- Fix recursive deletion of offline folders reporting `Directory not empty`: namespace refreshes no longer resurrect deleted materialized subfolders from stale cloud metadata while deletion is waiting for sync. Cloud-only folders and new remote children remain visible; deletion continues to use Drive Trash.
+- Add regression coverage for nested offline tree deletion before the watcher or cloud sync runs, deletion after scanning, pin behavior after deletion, locally recreated directories, and new cloud-only children. Unpin continues to remove only eligible local copies without deleting cloud contents.
+
 ## v1.1.2 — 31 October 2026
 
 - Immediately ask the existing service to retry after a successful Google re-login, instead of leaving the dashboard's login warning until the retry timer expires. Preserve explicit pauses and clear health warnings only after a verified sync result.
