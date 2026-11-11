@@ -6369,6 +6369,53 @@ async fn upload_cleanup_recovers_missing_completed_blob_and_rejects_external_pat
 }
 
 #[tokio::test]
+async fn desktop_update_restart_can_retry_while_service_is_already_draining() {
+    use mygdrive_sync::{account_manager, service};
+
+    let fixture = Fixture::new(true);
+    fixture.drive.hold_get.store(true, Ordering::SeqCst);
+    let engine = Arc::new(fixture.engine().await);
+    let service = tokio::spawn(service::run_owned(
+        engine,
+        fixture.state.clone(),
+        service_config(&fixture),
+        false,
+        CancellationToken::new(),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), fixture.drive.get_entered.notified())
+        .await
+        .unwrap();
+    let status = service_wait(&fixture.state, |s| s.cycle_active).await;
+    let mut request = service::Request::new(service::Action::Shutdown);
+    request.session_id = Some(status.session_id);
+    assert!(
+        service::send(&fixture.state, &request)
+            .await
+            .unwrap()
+            .accepted
+    );
+    service_wait(&fixture.state, |s| s.shutdown_requested).await;
+
+    let state = fixture.state.clone();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_mygdrive-sync"));
+    let mut retry =
+        tokio::spawn(async move { account_manager::drain_collection(&state, &binary, true).await });
+    let pending = tokio::time::timeout(Duration::from_millis(150), &mut retry).await;
+    fixture.drive.release_get.notify_one();
+    assert!(
+        pending.is_err(),
+        "retry must wait for the already-draining service: {pending:?}"
+    );
+    tokio::time::timeout(Duration::from_secs(6), retry)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    service.await.unwrap().unwrap();
+    assert!(fixture.state.join("restart-accounts.json").is_file());
+}
+
+#[tokio::test]
 async fn desktop_update_restart_drains_active_work_and_preserves_paused_service() {
     use mygdrive_sync::{
         dashboard::{self, Command, Event},

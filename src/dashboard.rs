@@ -301,25 +301,22 @@ pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'
         | Command::ShutdownCollectionAndWait
         | Command::RestartCollectionAfterUpdate => unreachable!(),
     };
-    let mut request = Request::new(action);
-    request.session_id = Some(current.status.session_id);
-    // Retry only the same request/session ID. Do not turn an uncertain ACK into a new action.
-    let reply = match service::send(state, &request).await {
-        Ok(r) => r,
-        Err(_) => service::send(state, &request).await?,
-    };
-    if !reply.accepted {
-        return Err(Error::Invalid("service rejected action".into()));
+    // A retry after a slow drain must resume waiting. The service rejects new
+    // mutation requests once shutdown has begun, including another Shutdown.
+    if !(matches!(command, Command::ShutdownAndWait) && current.status.shutdown_requested) {
+        let mut request = Request::new(action);
+        request.session_id = Some(current.status.session_id);
+        // Retry only the same request/session ID. Do not turn an uncertain ACK into a new action.
+        let reply = match service::send(state, &request).await {
+            Ok(r) => r,
+            Err(_) => service::send(state, &request).await?,
+        };
+        if !reply.accepted {
+            return Err(Error::Invalid("service rejected action".into()));
+        }
     }
     if matches!(command, Command::ShutdownAndWait) {
-        // An ACK means draining, not exited. Wait for the single-writer lock to be released.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-        while !engine_available(state)? {
-            if tokio::time::Instant::now() >= deadline {
-                return Err(Error::Invalid("service shutdown not confirmed".into()));
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
+        wait_for_engine_exit(state).await?;
         return Ok(tr("Service berhenti dengan tertib."));
     }
     Ok(match command {
@@ -334,6 +331,15 @@ pub async fn perform(state: &Path, binary: &Path, command: Command) -> Result<&'
         | Command::ShutdownCollectionAndWait
         | Command::RestartCollectionAfterUpdate => unreachable!(),
     })
+}
+async fn wait_for_engine_exit(state: &Path) -> Result<()> {
+    // An ACK means draining, not exited. Large scans and active transfers can
+    // take more than two minutes. Keep the restart pending until the writer
+    // actually exits; cancellation is owned by the desktop controller.
+    while !engine_available(state)? {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    Ok(())
 }
 pub(crate) fn engine_available(state: &Path) -> Result<bool> {
     use fs2::FileExt;
@@ -468,4 +474,23 @@ pub async fn read_activity_page(state: &Path) -> Result<ActivityPage> {
         pending_deletions,
         retry_operations,
     })
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use fs2::FileExt;
+
+    #[tokio::test(start_paused = true)]
+    async fn slow_shutdown_keeps_restart_pending_until_the_writer_exits() {
+        let temp = tempfile::tempdir().unwrap();
+        let writer = std::fs::File::create(temp.path().join("engine.lock")).unwrap();
+        writer.lock_exclusive().unwrap();
+        let mut waiting = Box::pin(wait_for_engine_exit(temp.path()));
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        tokio::time::advance(Duration::from_secs(5 * 60)).await;
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        drop(writer);
+        waiting.await.unwrap();
+    }
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.1.4 — 12 November 2026
+
+- Fix **Restart now** after an update when a service is still draining: retries resume waiting instead of sending a new shutdown request that the stopping service rejects. Keep restart pending beyond two minutes for long scans/transfers, and launch only after the writer lock is released. Preserve the account restart receipt and paused state.
+- Add regression tests for retrying during an active shutdown and waiting through a simulated five-minute drain. Existing desktop processes retain the restart code of their running version; reopen the updated application once if the old restart attempt has already failed.
+
 ## v1.1.3 — 12 November 2026
 
 - Fix recursive deletion of offline folders reporting `Directory not empty`: namespace refreshes no longer resurrect deleted materialized subfolders from stale cloud metadata while deletion is waiting for sync. Cloud-only folders and new remote children remain visible; deletion continues to use Drive Trash.
