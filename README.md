@@ -221,6 +221,9 @@ cargo test --locked
 ./run-desktop.sh
 ```
 
+## Bug yang Ditemukan :
+#Google drive rust di Linux buatan saya tidak bisa menghapus folder yang tersedia offline "Directory Not Empety" buat perilaku yang smaa dengan google drive memperlakukan folder tersedia offline ini
+
 GTK development packages are required for desktop builds. The build script detects `.tools/gtk-sdk` and `.tools/cargo` when present. Core/CLI builds do not require GTK. See [desktop development](DESKTOP.md), [service IPC](SERVICE.md), [offline behavior](OFFLINE_MODE.md), [Thunar/FUSE](THUNAR_ONLINE.md), [scope migration](STREAM_MY_DRIVE.md), [mutations](SYNC_MUTATIONS.md), and [performance notes](PERFORMANCE.md).
 
 Build distribution packages with `scripts/build-deb.sh` and `scripts/build-appimage.sh`. Release automation is in `.github/workflows/release.yml`. Keep credentials, state databases, `.tools`, build output, and local test artifacts out of published source. The project is licensed under [MIT](LICENSE).
