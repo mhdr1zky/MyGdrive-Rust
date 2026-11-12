@@ -7,6 +7,100 @@ use std::{
     collections::HashSet,
 };
 
+/// The dashboard's compact file history uses real service activity, including
+/// pending/retry state. The tray popup keeps its own independent window.
+pub struct FileActivity {
+    pub widget: gtk::Box,
+    signature: RefCell<String>,
+    limit: usize,
+}
+impl FileActivity {
+    pub fn new(limit: usize) -> Self {
+        let widget = column(0);
+        widget.add_css_class("file-activity");
+        let activity = Self {
+            widget,
+            signature: RefCell::new(String::new()),
+            limit,
+        };
+        activity.update(&ActivityPage::default());
+        activity
+    }
+    pub fn update(&self, page: &ActivityPage) {
+        let signature = format!(
+            "{:?}",
+            page.items.iter().take(self.limit).collect::<Vec<_>>()
+        );
+        if *self.signature.borrow() == signature {
+            return;
+        }
+        while let Some(child) = self.widget.first_child() {
+            self.widget.remove(&child);
+        }
+        if page.items.is_empty() {
+            let empty = column(10);
+            empty.add_css_class("activity-empty");
+            let icon = gtk::Image::from_icon_name("folder-cloud-symbolic");
+            icon.set_pixel_size(40);
+            empty.append(&icon);
+            let title = label(tr("Belum ada aktivitas."), "detail");
+            title.set_halign(gtk::Align::Center);
+            empty.append(&title);
+            let description = label(
+                tr("File yang disinkronkan akan muncul di sini."),
+                "subtitle",
+            );
+            description.set_halign(gtk::Align::Center);
+            empty.append(&description);
+            self.widget.append(&empty);
+        }
+        for item in page.items.iter().take(self.limit) {
+            let entry = row();
+            entry.add_css_class("file-activity-row");
+            let icon = gtk::Image::from_icon_name("text-x-generic-symbolic");
+            icon.set_pixel_size(22);
+            icon.add_css_class("file-type-icon");
+            entry.append(&icon);
+            let text = column(5);
+            text.set_hexpand(true);
+            let name = std::path::Path::new(&item.path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&item.path);
+            let title = label(name, "file-name");
+            title.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+            title.set_tooltip_text(Some(&item.path));
+            text.append(&title);
+            let detail = label(&format!("{} · {}", item.operation, item.detail), "subtitle");
+            detail.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            text.append(&detail);
+            entry.append(&text);
+            let state = gtk::Image::from_icon_name(if item.retrying {
+                "dialog-warning-symbolic"
+            } else if item.pending {
+                "emblem-synchronizing-symbolic"
+            } else {
+                "emblem-ok-symbolic"
+            });
+            state.add_css_class(if item.pending {
+                "file-pending"
+            } else {
+                "file-done"
+            });
+            state.set_tooltip_text(Some(if item.retrying {
+                tr("Dicoba ulang")
+            } else if item.pending {
+                tr("Menunggu")
+            } else {
+                tr("Selesai")
+            }));
+            entry.append(&state);
+            self.widget.append(&entry);
+        }
+        *self.signature.borrow_mut() = signature;
+    }
+}
+
 pub struct Popup {
     pub window: gtk::Window,
     health: gtk::Box,

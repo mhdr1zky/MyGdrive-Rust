@@ -51,7 +51,7 @@ struct Args {
     /// Open account/folder setup; with --snapshot, render that dialog without actions.
     #[arg(long)]
     setup: bool,
-    /// Start hidden once the panel has registered the tray; fall back to a visible window.
+    /// Stay in the background, including while waiting for the tray host at login.
     #[arg(long)]
     background: bool,
     /// Start the saved service, preserving its paused state. Used by opt-in autostart.
@@ -111,6 +111,7 @@ fn time_text(ms: Option<i64>) -> String {
 }
 struct Widgets {
     status_card: gtk::Box,
+    status_icon: gtk::Image,
     title: gtk::Label,
     pill: gtk::Label,
     description: gtk::Label,
@@ -138,6 +139,22 @@ impl Widgets {
         let active = snapshot.live && status.is_some_and(|s| !s.shutdown_requested);
         let paused = status.is_some_and(|s| s.paused);
         let notice = snapshot.notice();
+        if notice.is_some() || !active || paused {
+            self.status_icon.add_css_class("warning");
+        } else {
+            self.status_icon.remove_css_class("warning");
+        }
+        self.status_icon
+            .set_icon_name(Some(if notice.is_some() || !active {
+                "dialog-warning-symbolic"
+            } else if paused {
+                "media-playback-pause-symbolic"
+            } else if status.is_some_and(|s| s.progress.has_file_activity(mygdrive_sync::now_ms()))
+            {
+                "emblem-synchronizing-symbolic"
+            } else {
+                "emblem-ok-symbolic"
+            }));
         let needs_login = notice == Some(dashboard::Notice::AuthRequired);
         self.stage.set_visible(!needs_login);
         if needs_login {
@@ -338,7 +355,9 @@ struct PageLifecycle {
 fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::ApplicationWindow>) {
     if reuse.is_none() {
         if let Some(window) = app.active_window() {
-            window.present();
+            if !request.background {
+                window.present();
+            }
             return;
         }
     }
@@ -379,60 +398,71 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         gtk::ApplicationWindow::builder()
             .application(app)
             .title("MyGdrive Rust")
-            .default_width(1080)
-            .default_height(790)
+            .default_width(780)
+            .default_height(740)
             .build()
     });
     let lifecycle = Rc::new(RefCell::new(PageLifecycle::default()));
     let shell = column(0);
-    let navigation = column(12);
+    window.add_css_class("drive-dashboard");
+    let navigation = column(16);
     navigation.add_css_class("topbar");
-    let brand = flow();
+    let brand = row();
     brand.set_halign(gtk::Align::Fill);
-    brand.set_max_children_per_line(3);
-    brand.insert(&label("☁  MyGdrive Rust", "brand"), -1);
+    let logo = gtk::Image::from_gicon(&gio::BytesIcon::new(&glib::Bytes::from_static(
+        include_bytes!("../../assets/mygdrive.svg"),
+    )));
+    logo.set_pixel_size(32);
+    brand.append(&logo);
+    let wordmark = column(1);
+    wordmark.append(&label("MyGdrive", "brand"));
+    wordmark.append(&label("Rust · Linux", "brand-caption"));
+    brand.append(&wordmark);
     let autostart = gtk::CheckButton::with_label(tr("Mulai saat login"));
     autostart.set_sensitive(false);
-    brand.insert(&autostart, -1);
     let exit = gtk::Button::with_label(tr("Keluar"));
     exit.set_tooltip_text(Some(tr(
         "Selesaikan sinkronisasi aktif, hentikan layanan, lalu keluar.",
     )));
-    brand.insert(&exit, -1);
     navigation.append(&brand);
-    let nav = flow();
-    nav.set_halign(gtk::Align::Fill);
-    nav.insert(&label(tr("Dashboard"), "nav-item"), -1);
+    let pages = gtk::Stack::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .transition_type(gtk::StackTransitionType::Crossfade)
+        .build();
+    let nav = gtk::StackSwitcher::builder()
+        .stack(&pages)
+        .halign(gtk::Align::Start)
+        .build();
+    nav.add_css_class("drive-tabs");
     let activity_button = gtk::Button::with_label(tr("Aktivitas sinkronisasi"));
-    nav.insert(&activity_button, -1);
     let settings = gtk::Button::with_label(tr("Akun dan folder"));
-    nav.insert(&settings, -1);
     let offline_button = gtk::Button::with_label(tr("Tersedia offline"));
-    nav.insert(&offline_button, -1);
     let maintenance_button = gtk::Button::with_label(tr("Penyimpanan dan pemulihan"));
-    nav.insert(&maintenance_button, -1);
     navigation.append(&nav);
     shell.append(&navigation);
-    let content = column(12);
+    let content = column(10);
     content.add_css_class("content");
     content.set_hexpand(true);
-    let heading = column(5);
-    heading.append(&label(
-        &fmt(
-            "RUANG KERJA ANDA  ·  v{}",
-            &[("0", (env!("CARGO_PKG_VERSION")).to_string())],
-        ),
-        "eyebrow",
-    ));
-    heading.append(&label(tr("Dashboard"), "title"));
-    heading.append(&label(
-        tr("Pantau file, kelola sinkronisasi, dan periksa pembaruan aplikasi di sini."),
-        "subtitle",
-    ));
-    content.append(&heading);
+    let settings_content = column(18);
+    settings_content.add_css_class("content");
+    settings_content.append(&label(tr("Pengaturan"), "title"));
+    let preferences = card();
+    preferences.append(&label(tr("Akun dan folder"), "section-title"));
+    let preferences_actions = flow();
+    for button in [&settings, &offline_button, &maintenance_button] {
+        preferences_actions.insert(button, -1);
+    }
+    preferences.append(&preferences_actions);
+    preferences.append(&autostart);
+    settings_content.append(&preferences);
     let status_card = card();
     status_card.add_css_class("hero");
+    let status_icon = gtk::Image::from_icon_name("emblem-synchronizing-symbolic");
+    status_icon.set_pixel_size(28);
+    status_icon.add_css_class("sync-status-icon");
     let status_header = row();
+    status_header.append(&status_icon);
     let title = label(tr("Menghubungkan ke service…"), "status-title");
     title.set_hexpand(true);
     let pill = label(tr("Memeriksa"), "pill");
@@ -448,7 +478,6 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     status_card.append(&login_account);
     let stage = label(tr("Menunggu status"), "detail");
     stage.set_wrap(true);
-    status_card.append(&stage);
     let buttons = flow();
     let reauthenticate = gtk::Button::with_label(tr("Login ulang akun Google"));
     reauthenticate.add_css_class("suggested-action");
@@ -469,7 +498,7 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     let restart_request = Rc::new(RefCell::new(RestartRequest::default()));
     let updating = Rc::new(Cell::new(false));
     let request_update = restart_request.clone();
-    content.append(&updater::panel(
+    settings_content.append(&updater::panel(
         snapshot_mode,
         updating.clone(),
         move || {
@@ -477,7 +506,7 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         },
     ));
     let request_language = restart_request.clone();
-    content.append(&settings::panel(
+    settings_content.append(&settings::panel(
         &language,
         snapshot_mode,
         move |language| {
@@ -485,7 +514,7 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         },
     ));
     let folder_card = card();
-    folder_card.append(&label(tr("FOLDER TERHUBUNG"), "eyebrow"));
+    folder_card.append(&label(tr("File Anda"), "section-title"));
     let profile = label(tr("Google Drive"), "detail");
     folder_card.append(&profile);
     let folder = label(tr("Memuat…"), "detail");
@@ -494,7 +523,6 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     folder_card.append(&folder);
     let remote = label("", "subtitle");
     remote.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-    folder_card.append(&remote);
     let links = flow();
     let open = gtk::Button::with_label(tr("Buka folder lokal"));
     let drive = gtk::Button::with_label(tr("Buka di Drive"));
@@ -520,7 +548,13 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         metric.append(value);
         metrics.insert(&metric, -1);
     }
-    content.append(&metrics);
+    let details = gtk::Expander::new(Some(tr("Detail sinkronisasi")));
+    let detail_content = column(12);
+    detail_content.append(&metrics);
+    detail_content.append(&remote);
+    detail_content.append(&stage);
+    details.set_child(Some(&detail_content));
+    settings_content.append(&details);
     let activity_card = card();
     activity_card.append(&label(tr("AKTIVITAS SESI INI"), "eyebrow"));
     let error = label(tr("Menunggu hasil service."), "detail");
@@ -532,23 +566,55 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     activity_card.append(&activity);
     let expander = gtk::Expander::new(Some(tr("Aktivitas sesi ini")));
     expander.set_child(Some(&activity_card));
-    content.append(&expander);
+    let recent_heading = row();
+    let recent_title = label(tr("Aktivitas terbaru"), "section-title");
+    recent_title.set_hexpand(true);
+    recent_heading.append(&recent_title);
+    activity_button.add_css_class("flat");
+    recent_heading.append(&activity_button);
+    content.append(&recent_heading);
+    let recent_files = Rc::new(progress::FileActivity::new(2));
+    content.append(&recent_files.widget);
     let notice=label(tr("File diunduh saat dibuka. Gunakan Tersedia offline agar file bisa dibuka tanpa internet. Perubahan lokal tetap disimpan saat koneksi terputus."),"notice");
     notice.set_wrap(true);
-    content.append(&notice);
+    settings_content.append(&notice);
+    settings_content.append(&exit);
     let feedback = label(
         tr("Menutup jendela ini tetap membiarkan service berjalan."),
         "subtitle",
     );
     feedback.set_wrap(true);
-    content.append(&feedback);
+    feedback.add_css_class("dashboard-feedback");
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&content)
         .hexpand(true)
         .vexpand(true)
         .build();
-    shell.append(&scroll);
+    pages.add_titled(&scroll, Some("home"), tr("Beranda"));
+    let activity_content = column(16);
+    activity_content.add_css_class("content");
+    activity_content.append(&label(tr("Aktivitas sinkronisasi"), "title"));
+    let all_files = Rc::new(progress::FileActivity::new(20));
+    activity_content.append(&all_files.widget);
+    activity_content.append(&expander);
+    let activity_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .child(&activity_content)
+        .build();
+    pages.add_titled(
+        &activity_scroll,
+        Some("activity"),
+        tr("Aktivitas sinkronisasi"),
+    );
+    let settings_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .child(&settings_content)
+        .build();
+    pages.add_titled(&settings_scroll, Some("settings"), tr("Pengaturan"));
+    pages.set_visible_child_name("home");
+    shell.append(&pages);
+    shell.append(&feedback);
     window.set_child(Some(&shell));
     {
         let weak = window.downgrade();
@@ -570,6 +636,7 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     }
     let widgets = Rc::new(Widgets {
         status_card,
+        status_icon,
         title,
         pill,
         description,
@@ -619,8 +686,8 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     app.add_action(&reauth_action);
     let progress = Rc::new(progress::Popup::new(&window, snapshot_mode));
     let progress_action = gio::SimpleAction::new_stateful("progress", None, &false.to_variant());
-    let popup_button = progress.clone();
-    activity_button.connect_clicked(move |_| popup_button.present(None));
+    let activity_pages = pages.clone();
+    activity_button.connect_clicked(move |_| activity_pages.set_visible_child_name("activity"));
     let popup = progress.clone();
     progress_action.connect_activate(move |_, _| popup.present(None));
     let action_state = progress_action.clone();
@@ -892,9 +959,6 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     let progress_for_open = progress.clone();
     let mut last_cycle = None;
     let mut queued_files = 0;
-    let mut background_pending =
-        background && !show_setup && !show_offline && !show_progress && !snapshot_mode;
-    let background_deadline = std::time::Instant::now() + Duration::from_secs(11);
     if start_service && !snapshot_mode && controller.commands.try_send(Command::Start).is_ok() {
         busy.set(true);
         feedback.set_text(tr("Memulai service dari konfigurasi tersimpan…"));
@@ -914,15 +978,11 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         };
         if let Some(tray) = &tray {
             let available = tray.available();
-            if tray_ready.replace(available) && !available {
+            if tray_ready.replace(available) && !available && !background {
                 window.present();
                 feedback.set_text(tr(
                     "Tray terputus. Dashboard ditampilkan agar aplikasi tetap dapat diakses.",
                 ));
-            }
-            if background_pending && available {
-                window.set_visible(false);
-                background_pending = false;
             }
             tray.update(
                 tray::Model::from_snapshot(&current.borrow(), busy.get())
@@ -931,7 +991,6 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
             for _ in 0..16 {
                 match tray.events.try_recv() {
                     Ok(tray::Event::Show) => {
-                        background_pending = false;
                         window.present();
                     }
                     Ok(tray::Event::Progress) => progress.present(None),
@@ -948,11 +1007,6 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
                     Err(_) => break,
                 }
             }
-        }
-        if background_pending && std::time::Instant::now() >= background_deadline {
-            background_pending = false;
-            window.present();
-            feedback.set_text(tr("Tray belum tersedia. Dashboard tetap terbuka."));
         }
         if quit_requested.get() {
             *restart_request.borrow_mut() = RestartRequest::default();
@@ -1068,6 +1122,8 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
                 }
                 Ok(Event::Activity(items)) => {
                     queued_files = items.pending_files;
+                    recent_files.update(&items);
+                    all_files.update(&items);
                     progress.update(&items, &current.borrow());
                 }
                 Ok(Event::Completed(result)) => {
@@ -1471,12 +1527,18 @@ mod account_ui_tests {
         assert!(find_button(dialog.upcast_ref(), tr("Hubungkan akun baru…")).is_none());
         if let Some(path) = std::env::var_os("MYGDRIVE_REAUTH_PREVIEW") {
             let paintable = gtk::WidgetPaintable::new(Some(&dialog));
-            let snapshot = gtk::Snapshot::new();
-            paintable.snapshot(&snapshot, dialog.width() as f64, dialog.height() as f64);
+            let node = RefCell::new(None);
+            // A mapped button does not guarantee the first frame has rendered.
+            pump_until(|| {
+                let snapshot = gtk::Snapshot::new();
+                paintable.snapshot(&snapshot, dialog.width() as f64, dialog.height() as f64);
+                *node.borrow_mut() = snapshot.to_node();
+                node.borrow().is_some()
+            });
             dialog
                 .renderer()
                 .unwrap()
-                .render_texture(snapshot.to_node().unwrap(), None)
+                .render_texture(node.borrow().as_ref().unwrap(), None)
                 .save_to_png(PathBuf::from(path))
                 .unwrap();
         }

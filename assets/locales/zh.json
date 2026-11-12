@@ -351,5 +351,11 @@
   "Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.": "请在浏览器中使用同一个 Google 帐号完成登录。本地文件及文件夹配对均已保留。",
   "Menyiapkan login ulang akun tersimpan…": "正在准备重新登录已保存的帐号…",
   "Kembali ke dashboard": "返回仪表盘",
-  "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.": "重新登录成功。帐号和文件夹均已保留。您可以返回仪表盘。"
+  "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.": "重新登录成功。帐号和文件夹均已保留。您可以返回仪表盘。",
+  "Beranda": "首页",
+  "Pengaturan": "设置",
+  "File Anda": "您的文件",
+  "Detail sinkronisasi": "同步详情",
+  "Aktivitas terbaru": "最近活动",
+  "File yang disinkronkan akan muncul di sini.": "已同步的文件将显示在这里。"
 }

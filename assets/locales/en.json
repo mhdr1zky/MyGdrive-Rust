@@ -351,5 +351,11 @@
   "Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.": "Finish signing in in your browser with the same Google account. Your local files and folder pair are retained.",
   "Menyiapkan login ulang akun tersimpan…": "Preparing to sign in to the saved account…",
   "Kembali ke dashboard": "Back to dashboard",
-  "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.": "Sign-in succeeded. Your account and folders are retained. You can return to the dashboard."
+  "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.": "Sign-in succeeded. Your account and folders are retained. You can return to the dashboard.",
+  "Beranda": "Home",
+  "Pengaturan": "Settings",
+  "File Anda": "Your files",
+  "Detail sinkronisasi": "Sync details",
+  "Aktivitas terbaru": "Recent activity",
+  "File yang disinkronkan akan muncul di sini.": "Your synced files will appear here."
 }

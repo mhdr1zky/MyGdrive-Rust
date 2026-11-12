@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.0 — 12 November 2026
+
+- Keep **Start at login** in the background with the tray icon only. Remove the 11-second dashboard fallback and automatic window opening when the tray host reconnects for background launches. Tray registration still retries; manual launches and the tray's Show action open the dashboard. Existing autostart entries work without toggling the setting again.
+- Redesign the dashboard around a compact Drive for desktop-style header and **Home**, **Sync activity**, and **Settings** tabs. Show recent real file activity with pending/completed/retry indicators; keep account switching, sync controls and local/Drive shortcuts accessible. Move updates, interface language, offline selections, account management and diagnostics into Settings, with native light/dark theme support and English, Indonesian and Chinese labels.
+- Verify background startup on an invisible Xephyr display and private D-Bus bus without a tray host, beyond the former timeout, including manual reopening and repeated background activation. Add synthetic-data rendering checks for dashboard tabs in light and dark themes.
+
 ## v1.1.4 — 12 November 2026
 
 - Fix **Restart now** after an update when a service is still draining: retries resume waiting instead of sending a new shutdown request that the stopping service rejects. Keep restart pending beyond two minutes for long scans/transfers, and launch only after the writer lock is released. Preserve the account restart receipt and paused state.

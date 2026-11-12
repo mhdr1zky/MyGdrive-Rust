@@ -43,3 +43,32 @@ flowboxchild { padding: 0; }
 list.boxed-list { background: @theme_base_color; color: @theme_text_color; border: 1px solid @app_border; border-radius: 12px; padding: 6px; }
 progressbar trough { background: alpha(@theme_fg_color, 0.12); border-radius: 8px; min-height: 6px; }
 progressbar progress { background: @theme_selected_bg_color; border-radius: 8px; min-height: 6px; }
+
+/* A compact Drive-style desktop surface, keeping native light/dark colors. */
+.drive-dashboard .topbar { padding: 18px 24px 0; border-bottom: none; }
+.drive-dashboard .brand { font-size: 22px; font-weight: 600; color: @theme_text_color; }
+.drive-dashboard .brand-caption { font-size: 11px; }
+.drive-tabs { padding: 0 0 12px; }
+.drive-tabs button { border: none; border-radius: 22px; background: transparent; padding: 10px 16px; font-weight: 500; }
+.drive-tabs button:checked { background: mix(@theme_base_color, #1a73e8, 0.14); color: @theme_text_color; }
+.drive-tabs button:hover { background: mix(@theme_base_color, #1a73e8, 0.08); }
+.drive-dashboard .content { padding: 18px 24px; }
+.drive-dashboard .card { padding: 16px; border-radius: 18px; border-color: alpha(@theme_fg_color, 0.10); }
+.drive-dashboard .hero { background: @theme_base_color; border-color: alpha(@theme_fg_color, 0.10); }
+.drive-dashboard .hero.auth-required { background: mix(@theme_base_color, #e5a832, 0.12); border-color: alpha(#e5a832, 0.65); }
+.drive-dashboard .status-title { font-size: 22px; font-weight: 600; }
+.drive-dashboard .section-title { font-size: 16px; font-weight: 600; }
+.sync-status-icon { color: #34a853; padding: 8px; }
+.sync-status-icon.warning { color: #d79c25; }
+.auth-required .sync-status-icon { color: #d79c25; }
+.drive-dashboard button.flat { background: transparent; border-color: transparent; color: @app_accent; padding: 5px 0; }
+.drive-dashboard .account-menu { border: none; background: transparent; padding: 2px 6px; }
+.dashboard-feedback { padding: 12px 24px; border-top: 1px solid @app_border; font-size: 11px; }
+.file-activity { background: @theme_base_color; color: @theme_text_color; border: 1px solid alpha(@theme_fg_color, 0.10); border-radius: 18px; }
+.file-activity-row { padding: 13px 16px; border-bottom: 1px solid alpha(@theme_fg_color, 0.08); }
+.file-activity-row:last-child { border-bottom: none; }
+.file-type-icon { color: #4285f4; background: mix(@theme_base_color, #4285f4, 0.10); padding: 10px; border-radius: 10px; }
+.file-name { font-size: 13px; font-weight: 500; }
+.file-done { color: #34a853; }
+.file-pending { color: @app_muted; }
+.activity-empty { padding: 26px 20px; color: @app_muted; }

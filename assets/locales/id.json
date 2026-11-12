@@ -351,5 +351,11 @@
   "Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.": "Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.",
   "Menyiapkan login ulang akun tersimpan…": "Menyiapkan login ulang akun tersimpan…",
   "Kembali ke dashboard": "Kembali ke dashboard",
-  "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.": "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard."
+  "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.": "Login ulang berhasil. Akun dan folder tetap tersimpan. Anda dapat kembali ke dashboard.",
+  "Beranda": "Beranda",
+  "Pengaturan": "Pengaturan",
+  "File Anda": "File Anda",
+  "Detail sinkronisasi": "Detail sinkronisasi",
+  "Aktivitas terbaru": "Aktivitas terbaru",
+  "File yang disinkronkan akan muncul di sini.": "File yang disinkronkan akan muncul di sini."
 }

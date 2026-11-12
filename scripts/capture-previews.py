@@ -310,7 +310,7 @@ def capture(args):
             env["DISPLAY"] = display
             preferences = subprocess.Popen(["/usr/lib/x86_64-linux-gnu/xfce4/xfconf/xfconfd"], env=env, stdout=log, stderr=log)
             binary_dir = (REPO / args.binary_dir).resolve()
-            def render(filename, option, title):
+            def render(filename, option, title, tab=None):
                 application = subprocess.Popen([str(binary_dir / "mygdrive-desktop"), "--state", str(demo.state), *option,
                                                 "--snapshot", str(OUT / filename)], env=env, stdout=log, stderr=log)
                 if args.compact or option == ["--offline"]:
@@ -325,6 +325,37 @@ def capture(args):
                                 lib.XSync(isolated, 0)
                             break
                         time.sleep(.05)
+                if tab:
+                    # Exercise actual GTK tab buttons inside the invisible
+                    # nested display; never move the host desktop pointer.
+                    xtst = ctypes.CDLL(ctypes.util.find_library("Xtst"))
+                    xtst.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                                        ctypes.c_int, ctypes.c_int, ctypes.c_ulong]
+                    xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                                                        ctypes.c_int, ctypes.c_ulong]
+                    lib.XTranslateCoordinates.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                        ctypes.c_ulong, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int),
+                        ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_ulong)]
+                    for _ in range(60):
+                        window = find_window(lib, isolated, title)
+                        if window:
+                            time.sleep(.8)
+                            x, y, child = ctypes.c_int(), ctypes.c_int(), ctypes.c_ulong()
+                            lib.XTranslateCoordinates(isolated, window, lib.XDefaultRootWindow(isolated),
+                                240 if tab == "activity" else 360, 118,
+                                ctypes.byref(x), ctypes.byref(y), ctypes.byref(child))
+                            xtst.XTestFakeMotionEvent(isolated, -1, x.value, y.value, 0)
+                            lib.XSync(isolated, 0)
+                            time.sleep(.1)
+                            xtst.XTestFakeButtonEvent(isolated, 1, 1, 0)
+                            lib.XSync(isolated, 0)
+                            time.sleep(.05)
+                            xtst.XTestFakeButtonEvent(isolated, 1, 0, 0)
+                            lib.XSync(isolated, 0)
+                            break
+                        time.sleep(.05)
+                    else:
+                        raise RuntimeError("Dashboard tabs unavailable")
                 application.wait(timeout=20)
                 if application.returncode:
                     raise RuntimeError(f"Application exited with {application.returncode}")
@@ -400,6 +431,9 @@ def capture(args):
                 print("Storage/recovery preview captured:", OUT)
                 return
             render("dashboard.png", [], "MyGdrive Rust")
+            if args.dashboard_tabs:
+                render("dashboard-activity.png", [], "MyGdrive Rust", "activity")
+                render("dashboard-settings.png", [], "MyGdrive Rust", "settings")
             render("offline-browser.png", ["--offline"], "Tersedia offline")
             render("account-setup.png", ["--setup"], "Akun dan folder")
             demo.activity = True
@@ -475,6 +509,7 @@ if __name__ == "__main__":
     parser.add_argument("--display", type=int, default=79)
     parser.add_argument("--compact", action="store_true", help="Verify GTK layouts at 480px window width")
     parser.add_argument("--gtk-only", action="store_true", help="Skip the native FUSE/Thunar capture")
+    parser.add_argument("--dashboard-tabs", action="store_true", help="Exercise and render dashboard activity/settings tabs")
     parser.add_argument("--theme", help="Use a GTK theme inside the isolated preview session")
     parser.add_argument("--accounts-only", action="store_true", help="Render three synthetic accounts: running, paused and signed out")
     parser.add_argument("--auth-required", action="store_true", help="Render sign-in required notices and actions with a synthetic account")
