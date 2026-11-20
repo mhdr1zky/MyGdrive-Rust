@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.2 — 20 November 2026
+
+- Seamless automatic restart after updates: robust signal handling (ignoring premature SIGHUP/SIGTERM) in restart helper to ensure reliable process relaunching across all desktop environments and sessions.
+- Non-blocking collection draining: bounded drain on shutdown/update ensures pending background sync cycles never prevent application restart.
+- Updated documentation and screenshots for v1.2.2.
+
 ## v1.2.1 — 20 November 2026
 
 - Prompt account disconnection: bounded graceful shutdown (3s timeout) and fallback process termination ensures unlinking an account never hangs on long sync cycles or reconciliation scans.

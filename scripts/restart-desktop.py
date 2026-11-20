@@ -3,6 +3,7 @@ import argparse
 import os
 from pathlib import Path
 import select
+import signal
 import time
 
 
@@ -49,7 +50,11 @@ def main():
     if not command or not Path(command[0]).is_absolute():
         raise ValueError('An absolute desktop launcher is required')
     os.setsid()
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
     wait_for_exit(args.pid, args.start_time)
+    signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     os.execv(command[0], command)
 
 

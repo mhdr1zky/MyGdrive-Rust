@@ -226,7 +226,12 @@ pub async fn drain_collection(base: &Path, binary: &Path, restart: bool) -> Resu
         )?;
     }
     for state in running {
-        dashboard::perform(&state, binary, dashboard::Command::ShutdownAndWait).await?;
+        if dashboard::perform(&state, binary, dashboard::Command::ShutdownAndWait)
+            .await
+            .is_err()
+        {
+            force_terminate_service(&state).await;
+        }
     }
     if !restart {
         match std::fs::remove_file(resume_path(base)) {

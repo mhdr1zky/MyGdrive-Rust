@@ -2,7 +2,7 @@
 
 Google Drive synchronization for Linux, written in Rust. Browse My Drive from the desktop and file manager, download content when needed, and select files or folders to keep available offline.
 
-**Latest release: [v1.2.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.2.1)** — amd64 `.deb` packages for Ubuntu 24.04/Linux Mint 22 and x86_64 AppImage. This is an independent project and is not affiliated with Google.
+**Latest release: [v1.2.2](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.2.2)** — amd64 `.deb` packages for Ubuntu 24.04/Linux Mint 22 and x86_64 AppImage. This is an independent project and is not affiliated with Google.
 
 The compact dashboard has **Home**, **Sync activity**, and **Settings** tabs, with recent file activity and account switching. **Start at login** runs in the background with only the tray icon, even while the desktop panel is still starting. Open the launcher or choose **Show MyGdrive Rust** in the tray to open the dashboard.
 
@@ -68,14 +68,14 @@ Translations live in [`assets/locales/`](assets/locales/): `en.json`, `id.json`,
 
 ## Run the AppImage
 
-Download `mygdrive-rust_1.2.1_x86_64.AppImage` from [release v1.2.1](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.2.1):
+Download `mygdrive-rust_1.2.2_x86_64.AppImage` from [release v1.2.2](https://github.com/mhdr1zky/MyGdrive-Rust/releases/tag/v1.2.2):
 
 ```bash
-chmod +x mygdrive-rust_1.2.1_x86_64.AppImage
-./mygdrive-rust_1.2.1_x86_64.AppImage
+chmod +x mygdrive-rust_1.2.2_x86_64.AppImage
+./mygdrive-rust_1.2.2_x86_64.AppImage
 # CLI and virtual drive helper:
-./mygdrive-rust_1.2.1_x86_64.AppImage --sync --help
-./mygdrive-rust_1.2.1_x86_64.AppImage --mount --help
+./mygdrive-rust_1.2.2_x86_64.AppImage --sync --help
+./mygdrive-rust_1.2.2_x86_64.AppImage --mount --help
 ```
 
 The x86_64 AppImage targets Ubuntu 24.04/Linux Mint 22 or systems with glibc 2.39+. GTK libraries are bundled; graphics drivers, fonts, browser, and desktop services come from the host. It is not a sandbox. State and tokens use the native location (`~/.local/share/mygdrive/`); do not run `.deb` and AppImage processes against the same profile simultaneously.
@@ -86,10 +86,10 @@ Keep the AppImage at a fixed location before enabling **Start at login**. **Upda
 
 ## Install the Debian package
 
-Download `mygdrive-rust_1.2.1_amd64.deb` from the repository's Releases page:
+Download `mygdrive-rust_1.2.2_amd64.deb` from the repository's Releases page:
 
 ```bash
-sudo apt install ./mygdrive-rust_1.2.1_amd64.deb
+sudo apt install ./mygdrive-rust_1.2.2_amd64.deb
 /usr/bin/mygdrive-desktop
 ```
 
