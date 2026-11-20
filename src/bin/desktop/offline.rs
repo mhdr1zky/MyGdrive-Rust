@@ -20,6 +20,9 @@ struct Ui {
     title: gtk::Label,
     summary: gtk::Label,
     feedback: gtk::Label,
+    status_card: gtk::Box,
+    status_banner: gtk::Label,
+    spinner: gtk::Spinner,
     list: gtk::Box,
     back: gtk::Button,
     next: gtk::Button,
@@ -29,6 +32,7 @@ struct Ui {
     live: Cell<bool>,
     offset: Cell<usize>,
     revision: Cell<u64>,
+    last_action: RefCell<Option<(String, bool)>>,
 }
 fn state_text(node: &Node, complete: bool) -> String {
     let c = &node.counts;
@@ -75,21 +79,46 @@ impl Ui {
         {
             self.revision.set(self.revision.get() + 1);
             self.busy.set(true);
+            self.spinner.set_visible(true);
+            self.spinner.start();
+            self.status_card.set_visible(true);
             self.feedback.set_text(tr("Memproses inventaris/pilihan…"));
             self.list.set_sensitive(false);
             for b in [&self.back, &self.next, &self.reload, &self.current_pin] {
                 b.set_sensitive(false);
             }
         } else {
+            self.spinner.stop();
+            self.spinner.set_visible(false);
+            self.status_banner.set_text(&tr(
+                "Worker belum tersedia. Tutup dan buka kembali jendela ini.",
+            ));
+            self.status_card.set_visible(true);
             self.feedback.set_text(tr(
                 "Worker belum tersedia. Tutup dan buka kembali jendela ini.",
             ));
         }
     }
-    fn choose(&self, target: String, pinned: bool) {
+    fn choose(&self, target: String, pinned: bool, name: &str) {
         let Some(page) = self.page.borrow().clone() else {
             return;
         };
+        let action_text = if pinned {
+            fmt(
+                "Sedang menerapkan: menjadikan \"{0}\" selalu tersedia offline…",
+                &[("0", name.to_owned())],
+            )
+        } else {
+            fmt(
+                "Sedang menerapkan: melepas pilihan offline untuk \"{0}\"…",
+                &[("0", name.to_owned())],
+            )
+        };
+        *self.last_action.borrow_mut() = Some((name.to_owned(), pinned));
+        self.status_card.remove_css_class("success");
+        self.status_card.add_css_class("processing");
+        self.status_banner.set_text(&action_text);
+        self.status_card.set_visible(true);
         self.send(Command::Set {
             target,
             pinned,
@@ -100,6 +129,25 @@ impl Ui {
     fn render(self: &Rc<Self>, page: Page, live: bool) {
         self.busy.set(false);
         self.live.set(live);
+        self.spinner.stop();
+        self.spinner.set_visible(false);
+        if let Some((action_name, pinned)) = self.last_action.borrow_mut().take() {
+            self.status_card.remove_css_class("processing");
+            self.status_card.add_css_class("success");
+            let msg = if pinned {
+                fmt(
+                    "✓ Berhasil disimpan: \"{0}\" ditandai selalu tersedia offline. Layanan sinkronisasi sedang mengunduh berkas di latar belakang.",
+                    &[("0", action_name)],
+                )
+            } else {
+                fmt(
+                    "✓ Berhasil disimpan: Pilihan offline untuk \"{0}\" telah dilepas. Berkas lokal bersih dan cache akan dirapikan pada sinkronisasi berikutnya.",
+                    &[("0", action_name)],
+                )
+            };
+            self.status_banner.set_text(&msg);
+            self.status_card.set_visible(true);
+        }
         self.title.set_text(&page.current.name);
         self.summary.set_text(&fmt(
             "{}\nInventaris diperiksa: {}",
@@ -172,9 +220,16 @@ impl Ui {
             let weak = Rc::downgrade(self);
             let key = node.key.clone();
             let pinned = !node.selected;
-            pin.connect_clicked(move |_| {
+            let node_name = node.name.clone();
+            pin.connect_clicked(move |btn| {
                 if let Some(ui) = weak.upgrade() {
-                    ui.choose(key.clone(), pinned);
+                    btn.set_sensitive(false);
+                    btn.set_label(if pinned {
+                        &tr("Menjadikan offline…")
+                    } else {
+                        &tr("Melepas pilihan…")
+                    });
+                    ui.choose(key.clone(), pinned, &node_name);
                 }
             });
             header.append(&pin);
@@ -244,6 +299,17 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
         nav.insert(b, -1);
     }
     content.append(&nav);
+    let status_card = row();
+    status_card.add_css_class("status-banner");
+    let spinner = gtk::Spinner::new();
+    spinner.set_visible(false);
+    let status_banner = label("", "detail");
+    status_banner.set_hexpand(true);
+    status_banner.set_wrap(true);
+    status_card.append(&spinner);
+    status_card.append(&status_banner);
+    status_card.set_visible(false);
+    content.append(&status_card);
     let current_pin = gtk::Button::with_label(tr("Jadikan folder ini tersedia offline"));
     current_pin.add_css_class("suggested-action");
     current_pin.set_sensitive(false);
@@ -290,6 +356,9 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
         title,
         summary,
         feedback,
+        status_card,
+        status_banner,
+        spinner,
         list,
         back,
         next,
@@ -299,6 +368,7 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
         live: Cell::new(false),
         offset: Cell::new(0),
         revision: Cell::new(0),
+        last_action: RefCell::new(None),
     });
     {
         let weak = Rc::downgrade(&ui);
@@ -346,11 +416,19 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
     }
     {
         let weak = Rc::downgrade(&ui);
-        ui.current_pin.connect_clicked(move |_| {
+        ui.current_pin.connect_clicked(move |btn| {
             if let Some(ui) = weak.upgrade() {
                 let page = ui.page.borrow().clone();
                 if let Some(p) = page {
-                    ui.choose(p.current.key, !p.current.selected);
+                    let pinned = !p.current.selected;
+                    let folder_name = p.current.name.clone();
+                    btn.set_sensitive(false);
+                    btn.set_label(if pinned {
+                        &tr("Menjadikan folder ini offline…")
+                    } else {
+                        &tr("Melepas pilihan folder ini…")
+                    });
+                    ui.choose(p.current.key, pinned, &folder_name);
                 }
             }
         });
@@ -397,6 +475,12 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
                     }
                     ui.busy.set(false);
                     ui.live.set(false);
+                    ui.spinner.stop();
+                    ui.spinner.set_visible(false);
+                    ui.status_card.remove_css_class("processing");
+                    ui.status_card.remove_css_class("success");
+                    ui.status_banner.set_text(&format!("⚠ {}", message));
+                    ui.status_card.set_visible(true);
                     ui.feedback.set_text(&message);
                     ui.list.set_sensitive(false);
                     ui.current_pin.set_sensitive(false);

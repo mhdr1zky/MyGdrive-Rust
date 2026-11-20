@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.3 — 20 November 2026
+
+- Clear visual feedback for offline selections: animated spinner, active status banners, and dynamic button labels ("Setting offline…", "Removing selection…") make offline file and folder pin/unpin operations immediately recognizable and responsive.
+- Prominent success and confirmation notifications in the offline browser explain background downloads and cache pruning when rules are saved.
+- Synchronized localization in Indonesian, English, and Simplified Chinese for all offline operations.
+
 ## v1.2.2 — 20 November 2026
 
 - Seamless automatic restart after updates: robust signal handling (ignoring premature SIGHUP/SIGTERM) in restart helper to ensure reliable process relaunching across all desktop environments and sessions.

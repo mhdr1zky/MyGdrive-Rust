@@ -77,3 +77,8 @@ progressbar progress { background: @theme_selected_bg_color; border-radius: 8px;
 .reauth-avatar { min-width: 72px; min-height: 72px; border-radius: 36px; font-size: 32px; font-weight: 800; background: mix(@theme_base_color, #e5a832, 0.22); color: @theme_text_color; padding: 0; margin: 0; }
 .reauth-title { font-size: 24px; font-weight: 700; }
 .reauth-btn { padding: 12px 32px; font-size: 15px; font-weight: 700; border-radius: 24px; }
+
+/* Status feedback for offline selections */
+.status-banner { border-radius: 12px; padding: 10px 14px; min-height: 24px; }
+.status-banner.processing { background: mix(@theme_base_color, #1a73e8, 0.12); border: 1px solid alpha(#1a73e8, 0.45); color: @theme_text_color; }
+.status-banner.success { background: mix(@theme_base_color, #2eab70, 0.14); border: 1px solid alpha(#2eab70, 0.50); color: @theme_text_color; }
