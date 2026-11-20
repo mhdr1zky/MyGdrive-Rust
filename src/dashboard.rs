@@ -221,9 +221,9 @@ pub async fn read_snapshot(state: &Path) -> Snapshot {
     let token_path = config
         .as_ref()
         .map(|c| crate::oauth::token_path(state, &c.account));
-    let signed_out = token_path.as_ref().is_some_and(|p| {
-        matches!(crate::oauth::saved_identity(p), Err(Error::AuthRequired))
-    });
+    let signed_out = token_path
+        .as_ref()
+        .is_some_and(|p| matches!(crate::oauth::saved_identity(p), Err(Error::AuthRequired)));
     let account = token_path
         .as_ref()
         .and_then(|p| crate::oauth::registered_identity(p));

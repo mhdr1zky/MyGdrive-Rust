@@ -616,10 +616,16 @@ fn error_kind(error: &Error) -> String {
     // Map well-known error types to stable UI keys first.
     match error {
         Error::AuthRequired => return "auth_required".into(),
-        Error::Http { status: 403, reason } if reason == "storageQuotaExceeded" => {
+        Error::Http {
+            status: 403,
+            reason,
+        } if reason == "storageQuotaExceeded" => {
             return "storage_quota_exceeded".into();
         }
-        Error::Http { status: 403, reason } if reason == "forbidden" || reason.contains("permission") => {
+        Error::Http {
+            status: 403,
+            reason,
+        } if reason == "forbidden" || reason.contains("permission") => {
             return "permission_denied".into();
         }
         Error::Http { status: 404, .. } => return "not_found".into(),
@@ -640,7 +646,11 @@ fn error_kind(error: &Error) -> String {
             .filter(|c| c.is_ascii() && *c != '\n' && *c != '\r')
             .take(100)
             .collect::<String>();
-        if safe.is_empty() { "service_error".into() } else { safe }
+        if safe.is_empty() {
+            "service_error".into()
+        } else {
+            safe
+        }
     } else {
         state_key
     }

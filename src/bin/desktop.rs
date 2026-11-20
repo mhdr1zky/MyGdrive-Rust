@@ -156,11 +156,11 @@ impl Widgets {
                 .map(|a| a.email.as_str())
                 .unwrap_or("");
             if email.is_empty() {
-                self.reauth_account_label.set_text(tr("Sesi login Google telah berakhir."));
+                self.reauth_account_label
+                    .set_text(tr("Sesi login Google telah berakhir."));
             } else {
-                self.reauth_account_label.set_text(
-                    &fmt("Akun: {}", &[("0", email.to_owned())]),
-                );
+                self.reauth_account_label
+                    .set_text(&fmt("Akun: {}", &[("0", email.to_owned())]));
             }
             self.root_stack.set_visible_child_name("reauth");
         } else {
@@ -422,7 +422,8 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         None => return,
     };
     let relaunch = restart::Launcher::capture(&tray_state, &binary).ok();
-    let controller = match dashboard::spawn_observer(state.clone(), binary.clone(), !snapshot_mode) {
+    let controller = match dashboard::spawn_observer(state.clone(), binary.clone(), !snapshot_mode)
+    {
         Ok(c) => Rc::new(c),
         Err(_) => return,
     };
@@ -1070,7 +1071,11 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     let mut last_cycle = None;
     let mut queued_files = 0;
     let has_saved_config = mygdrive_sync::service::config_path(&state).is_file();
-    if start_service && has_saved_config && !snapshot_mode && controller.commands.try_send(Command::Start).is_ok() {
+    if start_service
+        && has_saved_config
+        && !snapshot_mode
+        && controller.commands.try_send(Command::Start).is_ok()
+    {
         busy.set(true);
         feedback.set_text(tr("Memulai service dari konfigurasi tersimpan…"));
     }
@@ -1229,8 +1234,8 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
                     }
                     let was_needs_login = current.borrow().live
                         && current.borrow().notice() == Some(dashboard::Notice::AuthRequired);
-                    let now_needs_login = snapshot.live
-                        && snapshot.notice() == Some(dashboard::Notice::AuthRequired);
+                    let now_needs_login =
+                        snapshot.live && snapshot.notice() == Some(dashboard::Notice::AuthRequired);
                     if was_needs_login && !now_needs_login {
                         feedback.set_text(tr(
                             "Login ulang akun Google berhasil dideteksi. Sinkronisasi aktif kembali.",
@@ -1487,7 +1492,9 @@ fn main() -> glib::ExitCode {
         if app.windows().is_empty() {
             build(app, request_for(&incoming, state, &language), None);
         } else {
-            let start_service = !incoming.no_start_service && !incoming.restore_accounts && incoming.snapshot.is_none();
+            let start_service = !incoming.no_start_service
+                && !incoming.restore_accounts
+                && incoming.snapshot.is_none();
             if start_service {
                 let base = collection.clone();
                 let state = state.clone();

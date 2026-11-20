@@ -268,7 +268,10 @@ async fn force_terminate_service(state: &Path) {
             let cmdline =
                 std::fs::read_to_string(format!("/proc/{pid}/cmdline")).unwrap_or_default();
             if cmdline.contains("mygdrive") {
-                tracing::info!(pid, "terminating sync service process for prompt disconnection");
+                tracing::info!(
+                    pid,
+                    "terminating sync service process for prompt disconnection"
+                );
                 unsafe {
                     libc::kill(pid, libc::SIGTERM);
                 }
