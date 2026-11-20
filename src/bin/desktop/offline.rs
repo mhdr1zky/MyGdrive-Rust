@@ -90,7 +90,7 @@ impl Ui {
         } else {
             self.spinner.stop();
             self.spinner.set_visible(false);
-            self.status_banner.set_text(&tr(
+            self.status_banner.set_text(tr(
                 "Worker belum tersedia. Tutup dan buka kembali jendela ini.",
             ));
             self.status_card.set_visible(true);
@@ -225,9 +225,9 @@ impl Ui {
                 if let Some(ui) = weak.upgrade() {
                     btn.set_sensitive(false);
                     btn.set_label(if pinned {
-                        &tr("Menjadikan offline…")
+                        tr("Menjadikan offline…")
                     } else {
-                        &tr("Melepas pilihan…")
+                        tr("Melepas pilihan…")
                     });
                     ui.choose(key.clone(), pinned, &node_name);
                 }
@@ -424,9 +424,9 @@ pub fn show(parent: &gtk::ApplicationWindow, state: PathBuf, preview: bool) -> g
                     let folder_name = p.current.name.clone();
                     btn.set_sensitive(false);
                     btn.set_label(if pinned {
-                        &tr("Menjadikan folder ini offline…")
+                        tr("Menjadikan folder ini offline…")
                     } else {
-                        &tr("Melepas pilihan folder ini…")
+                        tr("Melepas pilihan folder ini…")
                     });
                     ui.choose(p.current.key, pinned, &folder_name);
                 }
