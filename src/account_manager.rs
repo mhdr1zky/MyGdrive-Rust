@@ -261,12 +261,53 @@ pub async fn restore_collection(base: &Path, binary: &Path) -> Result<()> {
     Ok(())
 }
 
+async fn force_terminate_service(state: &Path) {
+    if let Ok(status) = service::last_status(state) {
+        let pid = status.pid as libc::pid_t;
+        if pid > 1 {
+            let cmdline =
+                std::fs::read_to_string(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+            if cmdline.contains("mygdrive") {
+                tracing::info!(pid, "terminating sync service process for prompt disconnection");
+                unsafe {
+                    libc::kill(pid, libc::SIGTERM);
+                }
+                for _ in 0..15 {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if dashboard::engine_available(state).unwrap_or(false) {
+                        return;
+                    }
+                }
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                for _ in 0..15 {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if dashboard::engine_available(state).unwrap_or(false) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub async fn disconnect(base: &Path, state: &Path, binary: &Path) -> Result<()> {
     let state = validate_target(base, state)?;
     let config = service::load_config(&state)?;
-    dashboard::perform(&state, binary, dashboard::Command::ShutdownAndWait).await?;
+    // Attempt graceful shutdown with a bounded timeout (3 seconds).
+    let graceful = tokio::time::timeout(
+        Duration::from_secs(3),
+        dashboard::perform(&state, binary, dashboard::Command::ShutdownAndWait),
+    )
+    .await;
+    // If graceful drain timed out or failed to release the engine lock, terminate the service process.
+    if graceful.is_err() || !dashboard::engine_available(&state).unwrap_or(false) {
+        force_terminate_service(&state).await;
+    }
     // Reserve writer ownership through credential removal; a concurrent service
     // launch must never keep using tokens that the user just disconnected.
+    let lock_path = state.join("engine.lock");
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -274,12 +315,32 @@ pub async fn disconnect(base: &Path, state: &Path, binary: &Path) -> Result<()> 
         .truncate(false)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(state.join("engine.lock"))?;
+        .open(&lock_path)?;
     let meta = lock.metadata()?;
     if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } {
         return Err(Error::Changed);
     }
-    lock.try_lock_exclusive().map_err(|_| Error::Changed)?;
+    let mut acquired = false;
+    for _ in 0..30 {
+        if lock.try_lock_exclusive().is_ok() {
+            acquired = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if !acquired {
+        return Err(Error::Changed);
+    }
+    // Persist stopped state cleanly so UI and snapshots immediately reflect the shutdown.
+    if let Ok(mut status) = service::last_status(&state) {
+        status.running = false;
+        status.cycle_active = false;
+        status.shutdown_requested = true;
+        status.phase = "stopped".into();
+        status.connection = crate::connectivity::ConnectionState::AuthRequired;
+        status.last_error = Some("auth_required".into());
+        let _ = service::atomic_json(&service::status_path(&state), &status);
+    }
     crate::autostart::for_profile(&state, binary)?.set_enabled(false)?;
     oauth::disconnect_local(&oauth::token_path(&state, &config.account))?;
     Ok(())

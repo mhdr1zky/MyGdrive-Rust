@@ -2089,6 +2089,38 @@ async fn service_wait(
 }
 
 #[tokio::test]
+async fn service_recovers_from_initial_connection_failure_without_manual_sync() {
+    use mygdrive_sync::{
+        connectivity::ConnectionState,
+        service::{self, Action, Request},
+    };
+    let f = Fixture::new(true);
+    f.drive.offline.store(true, Ordering::SeqCst);
+    let mut config = service_config(&f);
+    config.interval_seconds = 1;
+    let task = tokio::spawn(service::run_owned(
+        Arc::new(f.engine().await),
+        f.state.clone(),
+        config,
+        false,
+        CancellationToken::new(),
+    ));
+    let failed = service_wait(&f.state, |s| s.cycles_finished >= 1 && !s.cycle_active).await;
+    assert_ne!(failed.connection, ConnectionState::Online);
+    assert!(failed.last_success_ms.is_none());
+    f.drive.offline.store(false, Ordering::SeqCst);
+    let recovered =
+        service_wait(&f.state, |s| s.last_success_ms.is_some() && !s.cycle_active).await;
+    assert_eq!(recovered.connection, ConnectionState::Online);
+    assert!(recovered.last_error.is_none());
+    assert!(recovered.cycles_finished >= 2);
+    service::send(&f.state, &Request::new(Action::Shutdown))
+        .await
+        .unwrap();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn reauthentication_retries_without_backoff_and_preserves_pause() {
     use mygdrive_sync::{
         connectivity::ConnectionState,
@@ -5745,6 +5777,7 @@ async fn tray_health_distinguishes_lost_ui_connection_from_confirmed_sync_errors
         status: Some(status),
         config: None,
         account: None,
+        signed_out: false,
     };
     {
         let s = snapshot.status.as_mut().unwrap();

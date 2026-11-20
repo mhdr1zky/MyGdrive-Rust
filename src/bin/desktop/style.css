@@ -8,7 +8,7 @@
 .account-popover { padding: 10px; }
 .account-choice { padding: 10px; border-color: transparent; }
 .selected-account { background: @app_accent_surface; border-color: alpha(@theme_selected_bg_color, 0.55); }
-.account-avatar { min-width: 38px; min-height: 38px; border-radius: 22px; font-size: 16px; font-weight: 700; background: mix(@theme_base_color, @theme_selected_bg_color, 0.20); color: @theme_text_color; }
+.account-avatar { min-width: 38px; min-height: 38px; border-radius: 19px; font-size: 16px; font-weight: 700; background: mix(@theme_base_color, @theme_selected_bg_color, 0.20); color: @theme_text_color; padding: 0; margin: 0; }
 .avatar-1 { background: mix(@theme_base_color, #8060cc, 0.20); color: @theme_text_color; }
 .avatar-2 { background: mix(@theme_base_color, #2eab70, 0.20); color: @theme_text_color; }
 .avatar-3 { background: mix(@theme_base_color, #d38a35, 0.20); color: @theme_text_color; }
@@ -72,3 +72,8 @@ progressbar progress { background: @theme_selected_bg_color; border-radius: 8px;
 .file-done { color: #34a853; }
 .file-pending { color: @app_muted; }
 .activity-empty { padding: 26px 20px; color: @app_muted; }
+
+/* Dedicated re-authentication page */
+.reauth-avatar { min-width: 72px; min-height: 72px; border-radius: 36px; font-size: 32px; font-weight: 800; background: mix(@theme_base_color, #e5a832, 0.22); color: @theme_text_color; padding: 0; margin: 0; }
+.reauth-title { font-size: 24px; font-weight: 700; }
+.reauth-btn { padding: 12px 32px; font-size: 15px; font-weight: 700; border-radius: 24px; }

@@ -12,6 +12,8 @@ use std::{
 use tokio_util::io::ReaderStream;
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>;
+const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub const FILE_FIELDS: &str = "id,name,mimeType,version,size,sha256Checksum,md5Checksum,headRevisionId,parents,trashed,capabilities(canDownload,canEdit,canTrash)";
 
 #[async_trait]
@@ -222,11 +224,15 @@ impl HttpDriveClient {
         let mut token: Option<String> = None;
         let mut seen = std::collections::HashSet::new();
         loop {
-            let mut request = self.http.get(self.endpoint("files", None)?).query(&[
-                ("q", q.as_str()),
-                ("pageSize", "1000"),
-                ("fields", "nextPageToken,files(id,explicitlyTrashed)"),
-            ]);
+            let mut request = self
+                .http
+                .get(self.endpoint("files", None)?)
+                .timeout(METADATA_TIMEOUT)
+                .query(&[
+                    ("q", q.as_str()),
+                    ("pageSize", "1000"),
+                    ("fields", "nextPageToken,files(id,explicitlyTrashed)"),
+                ]);
             if let Some(value) = &token {
                 request = request.query(&[("pageToken", value)]);
             }
@@ -472,7 +478,8 @@ impl DriveClient for HttpDriveClient {
         let response = self
             .auth(
                 self.http
-                    .get(self.endpoint("changes", Some("startPageToken"))?),
+                    .get(self.endpoint("changes", Some("startPageToken"))?)
+                    .timeout(METADATA_TIMEOUT),
             )
             .await?
             .send()
@@ -485,12 +492,16 @@ impl DriveClient for HttpDriveClient {
     }
     async fn list_files(&self, token: Option<&str>) -> Result<FilePage> {
         let fields = format!("nextPageToken,files({FILE_FIELDS})");
-        let mut request = self.http.get(self.endpoint("files", None)?).query(&[
-            ("spaces", "drive"),
-            ("q", "trashed = false"),
-            ("pageSize", "1000"),
-            ("fields", fields.as_str()),
-        ]);
+        let mut request = self
+            .http
+            .get(self.endpoint("files", None)?)
+            .timeout(METADATA_TIMEOUT)
+            .query(&[
+                ("spaces", "drive"),
+                ("q", "trashed = false"),
+                ("pageSize", "1000"),
+                ("fields", fields.as_str()),
+            ]);
         if let Some(token) = token {
             request = request.query(&[("pageToken", token)]);
         }
@@ -503,13 +514,18 @@ impl DriveClient for HttpDriveClient {
         let fields =
             format!("nextPageToken,newStartPageToken,changes(fileId,removed,file({FILE_FIELDS}))");
         let response = self
-            .auth(self.http.get(self.endpoint("changes", None)?).query(&[
-                ("pageToken", token),
-                ("spaces", "drive"),
-                ("includeRemoved", "true"),
-                ("pageSize", "1000"),
-                ("fields", fields.as_str()),
-            ]))
+            .auth(
+                self.http
+                    .get(self.endpoint("changes", None)?)
+                    .timeout(METADATA_TIMEOUT)
+                    .query(&[
+                        ("pageToken", token),
+                        ("spaces", "drive"),
+                        ("includeRemoved", "true"),
+                        ("pageSize", "1000"),
+                        ("fields", fields.as_str()),
+                    ]),
+            )
             .await?
             .send()
             .await?;
@@ -520,6 +536,7 @@ impl DriveClient for HttpDriveClient {
             .auth(
                 self.http
                     .get(self.endpoint("files", Some(id))?)
+                    .timeout(METADATA_TIMEOUT)
                     .query(&[("fields", FILE_FIELDS)]),
             )
             .await?
@@ -539,11 +556,15 @@ impl DriveClient for HttpDriveClient {
         let mut seen = std::collections::HashSet::new();
         let mut files = Vec::new();
         loop {
-            let mut request = self.http.get(self.endpoint("files", None)?).query(&[
-                ("q", q.as_str()),
-                ("pageSize", "1000"),
-                ("fields", fields.as_str()),
-            ]);
+            let mut request = self
+                .http
+                .get(self.endpoint("files", None)?)
+                .timeout(METADATA_TIMEOUT)
+                .query(&[
+                    ("q", q.as_str()),
+                    ("pageSize", "1000"),
+                    ("fields", fields.as_str()),
+                ]);
             if let Some(value) = &token {
                 request = request.query(&[("pageToken", value)]);
             }

@@ -370,6 +370,7 @@ mod tests {
                 status: None,
                 config: None,
                 account: None,
+                signed_out: false,
             },
             false,
         );

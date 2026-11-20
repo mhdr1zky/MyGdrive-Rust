@@ -19,6 +19,7 @@ pub struct Snapshot {
     pub status: Option<ServiceStatus>,
     pub config: Option<service::ServiceConfig>,
     pub account: Option<crate::oauth::AccountIdentity>,
+    pub signed_out: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Notice {
@@ -59,10 +60,18 @@ impl Snapshot {
     pub fn notice(&self) -> Option<Notice> {
         use crate::connectivity::ConnectionState;
         let Some(status) = self.status.as_ref().filter(|_| self.live) else {
-            return Some(Notice::Reconnecting);
+            return if self.signed_out {
+                Some(Notice::AuthRequired)
+            } else {
+                Some(Notice::Reconnecting)
+            };
         };
         if !status.running || status.shutdown_requested {
-            return Some(Notice::Stopped);
+            return if self.signed_out {
+                Some(Notice::AuthRequired)
+            } else {
+                Some(Notice::Stopped)
+            };
         }
         match status.connection {
             ConnectionState::Offline => return Some(Notice::Offline),
@@ -209,23 +218,29 @@ pub fn spawn_observer(
 }
 pub async fn read_snapshot(state: &Path) -> Snapshot {
     let config = service::load_config(state).ok();
-    let account = config.as_ref().and_then(|c| {
-        crate::oauth::saved_identity(&crate::oauth::token_path(state, &c.account))
-            .ok()
-            .flatten()
+    let token_path = config
+        .as_ref()
+        .map(|c| crate::oauth::token_path(state, &c.account));
+    let signed_out = token_path.as_ref().is_some_and(|p| {
+        matches!(crate::oauth::saved_identity(p), Err(Error::AuthRequired))
     });
+    let account = token_path
+        .as_ref()
+        .and_then(|p| crate::oauth::registered_identity(p));
     match service::send(state, &Request::new(Action::Status)).await {
         Ok(reply) if reply.accepted => Snapshot {
             live: true,
             status: Some(reply.status),
             config: None,
             account,
+            signed_out,
         },
         _ => Snapshot {
             live: false,
             status: service::last_status(state).ok(),
             config,
             account,
+            signed_out,
         },
     }
 }

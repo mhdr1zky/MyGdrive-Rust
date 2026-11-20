@@ -75,6 +75,7 @@ struct Ui {
     logged: Cell<bool>,
     existing: Cell<bool>,
     saved_client: Cell<bool>,
+    snapshot_mode: bool,
     account: gtk::Label,
     target: gtk::Label,
     saved: Cell<bool>,
@@ -98,6 +99,8 @@ impl Ui {
         let idle = !self.busy.get() && !self.saved.get();
         self.login.set_sensitive(idle);
         self.reauth.set_sensitive(idle);
+        self.reauth
+            .set_visible(self.snapshot_mode || !self.logged.get());
         self.choose
             .set_sensitive(idle && self.logged.get() && !self.existing.get());
         self.reload.set_sensitive(idle && self.logged.get());
@@ -195,8 +198,9 @@ pub fn show_reauthentication(
     parent: &gtk::ApplicationWindow,
     current: PathBuf,
     snapshot_mode: bool,
+    select: Option<super::accounts::Select>,
 ) -> gtk::Window {
-    show_mode(parent, current, snapshot_mode, None, false, true)
+    show_mode(parent, current, snapshot_mode, select, false, true)
 }
 
 fn show_mode(
@@ -228,8 +232,8 @@ fn show_mode(
         })
         .transient_for(parent)
         .modal(true)
-        .default_width(690)
-        .default_height(if reauth_only { 400 } else { 690 })
+        .default_width(540)
+        .default_height(if reauth_only { 380 } else { 620 })
         .build();
     window.set_application(parent.application().as_ref());
     window.set_destroy_with_parent(true);
@@ -369,7 +373,7 @@ fn show_mode(
         .child(&content)
         .build();
     window.set_child(Some(&scroll));
-    let worker = match onboarding::spawn_observer(base, current, snapshot_mode) {
+    let worker = match onboarding::spawn_observer(base, current.clone(), snapshot_mode) {
         Ok(w) => w,
         Err(_) => {
             feedback.set_text(tr("Pengaturan tidak dapat dimulai."));
@@ -383,6 +387,7 @@ fn show_mode(
         logged: Cell::new(false),
         existing: Cell::new(false),
         saved_client: Cell::new(false),
+        snapshot_mode,
         account,
         target,
         saved: Cell::new(false),
@@ -613,6 +618,18 @@ fn show_mode(
                         ui.update();
                         ui.reauth.emit_clicked();
                     } else if reauth_only {
+                        if !snapshot_mode {
+                            if let Some(select) = &select {
+                                if let Some(window) = weak_window.upgrade() {
+                                    window.close();
+                                }
+                                select(current.clone());
+                                return glib::ControlFlow::Break;
+                            } else if let Some(window) = weak_window.upgrade() {
+                                window.close();
+                                return glib::ControlFlow::Break;
+                            }
+                        }
                         ui.feedback.set_text(if snapshot_mode {
                             tr("Selesaikan login di browser menggunakan akun Google yang sama. File lokal dan pasangan folder Anda tetap tersimpan.")
                         } else {

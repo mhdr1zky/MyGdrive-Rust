@@ -484,8 +484,34 @@ async fn wait_callback(listener: &TcpListener, state: &str) -> Result<String> {
                 if data.windows(4).any(|w| w == b"\r\n\r\n") { break; }
             }
             let parsed = std::str::from_utf8(&data).ok().and_then(|r| callback(r,state,port));
-            let (status, body) = if parsed.is_some() { ("200 OK", "Respons diterima. Kembali ke terminal untuk melihat hasil login.") } else { ("400 Bad Request", "Callback tidak valid.") };
-            socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",body.len()).as_bytes()).await?;
+            let (status, body) = if parsed.is_some() {
+                (
+                    "200 OK",
+                    concat!(
+                        "<!DOCTYPE html><html lang=\"id\"><head><meta charset=\"utf-8\">",
+                        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+                        "<title>Otentikasi Berhasil · MyGdrive Rust</title>",
+                        "<style>",
+                        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8f9fa;color:#202124;}",
+                        ".card{background:#fff;padding:40px;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,0.08);text-align:center;max-width:440px;margin:20px;}",
+                        ".icon{width:56px;height:56px;background:#e6f4ea;color:#137333;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 20px;font-weight:bold;}",
+                        "h1{font-size:20px;margin:0 0 10px;font-weight:600;color:#1a73e8;}",
+                        "p{font-size:14px;color:#3c4043;line-height:1.5;margin:0 0 16px;}",
+                        ".hint{font-size:13px;color:#70757a;margin-bottom:0;}",
+                        "</style></head><body><div class=\"card\"><div class=\"icon\">✓</div>",
+                        "<h1>Otentikasi Berhasil</h1>",
+                        "<p>Akun Google Anda berhasil diotentikasi. Aplikasi MyGdrive telah terhubung dan sinkronisasi akan dilanjutkan.</p>",
+                        "<p class=\"hint\">Anda dapat menutup tab browser ini dan kembali ke aplikasi MyGdrive.</p>",
+                        "</div><script>try{window.close();}catch(e){}</script></body></html>"
+                    ),
+                )
+            } else {
+                (
+                    "400 Bad Request",
+                    "<!DOCTYPE html><html lang=\"id\"><head><meta charset=\"utf-8\"><title>Otentikasi Gagal</title></head><body><h1>Otentikasi Gagal</h1><p>Callback otentikasi tidak valid atau telah kedaluwarsa.</p></body></html>",
+                )
+            };
+            socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",body.len()).as_bytes()).await?;
             Ok(parsed)
         }).await;
         if let Ok(Ok(Some(code))) = result {

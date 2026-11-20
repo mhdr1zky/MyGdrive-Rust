@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.2.1 — 20 November 2026
+
+- Prompt account disconnection: bounded graceful shutdown (3s timeout) and fallback process termination ensures unlinking an account never hangs on long sync cycles or reconciliation scans.
+- Smooth browser re-authentication: the loopback OAuth server displays an attractive confirmation page with auto-close in the browser, closes the setup modal automatically, restarts the sync service, and smoothly switches the desktop app directly to the active dashboard.
+- Responsive account actions: informative, contextual feedback in the account manager ("Disconnecting account and stopping sync service…", "Starting sync service…", etc.) with immediate list refresh on completion.
+- Centered user avatars across all components, dedicated sign-in required view, and localized error messages for permission denied, quota exceeded, and network issues in Indonesian, English, and Simplified Chinese.
+- Retry offline connections within 30 seconds even when the configured sync interval is long. Limit Drive metadata requests to 30 seconds so an unresponsive initial folder check cannot hold up recovery for five minutes.
+
 ## v1.2.0 — 12 November 2026
 
 - Keep **Start at login** in the background with the tray icon only. Remove the 11-second dashboard fallback and automatic window opening when the tray host reconnects for background launches. Tray registration still retries; manual launches and the tray's Show action open the dashboard. Existing autostart entries work without toggling the setting again.

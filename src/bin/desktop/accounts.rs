@@ -48,7 +48,11 @@ fn avatar(name: &str, email: &str) -> gtk::Label {
         hash.wrapping_mul(31).wrapping_add(byte as usize)
     }) % 5;
     avatar.add_css_class(&format!("avatar-{tint}"));
+    avatar.set_halign(gtk::Align::Center);
     avatar.set_valign(gtk::Align::Center);
+    avatar.set_xalign(0.5);
+    avatar.set_yalign(0.5);
+    avatar.set_justify(gtk::Justification::Center);
     avatar
 }
 impl Ui {
@@ -56,9 +60,23 @@ impl Ui {
         if self.preview || self.busy.get() {
             return false;
         }
+        let feedback_text = match &command {
+            Command::Disconnect(_) => tr("Memutuskan akun dan menghentikan layanan sinkronisasi…"),
+            Command::Control { command, .. } => match command {
+                dashboard::Command::Start => tr("Memulai layanan sinkronisasi…"),
+                dashboard::Command::Pause => tr("Menjeda sinkronisasi…"),
+                dashboard::Command::Resume => tr("Melanjutkan sinkronisasi…"),
+                dashboard::Command::Shutdown | dashboard::Command::ShutdownAndWait => {
+                    tr("Menghentikan layanan…")
+                }
+                _ => tr("Memproses permintaan akun…"),
+            },
+            Command::Select(_) => tr("Berpindah akun…"),
+            _ => tr("Memproses permintaan akun…"),
+        };
         if self.worker.commands.try_send(command).is_ok() {
             self.busy.set(true);
-            self.feedback.set_text(tr("Memproses permintaan akun…"));
+            self.feedback.set_text(feedback_text);
             return true;
         }
         false
@@ -72,7 +90,7 @@ impl Ui {
     fn reauthenticate(&self, state: PathBuf) {
         self.popover.popdown();
         if let Some(parent) = self.parent.upgrade() {
-            setup::show_reauthentication(&parent, state, self.preview);
+            setup::show_reauthentication(&parent, state, self.preview, Some(self.select.clone()));
         }
     }
     fn render(self: &Rc<Self>, accounts: Vec<Account>) {
@@ -224,11 +242,9 @@ impl Ui {
                 }
             });
             actions.insert(&open, -1);
-            if account.configured || account.signed_out {
+            if account.signed_out || needs_login {
                 let reconnect = gtk::Button::with_label(tr("Login ulang akun Google"));
-                if account.signed_out || needs_login {
-                    reconnect.add_css_class("suggested-action");
-                }
+                reconnect.add_css_class("suggested-action");
                 let state = account.state.clone();
                 let weak = Rc::downgrade(self);
                 reconnect.connect_clicked(move |_| {
@@ -294,8 +310,8 @@ impl Ui {
             .title(tr("Kelola akun · MyGdrive Rust"))
             .transient_for(&parent)
             .modal(true)
-            .default_width(780)
-            .default_height(800)
+            .default_width(540)
+            .default_height(620)
             .build();
         window.set_application(parent.application().as_ref());
         window.set_destroy_with_parent(true);
@@ -441,6 +457,10 @@ impl Switcher {
                         ui.busy.set(false);
                         ui.feedback.set_text(&result.unwrap_or_else(|error| error));
                         ui.signature.borrow_mut().clear();
+                        let rows = ui.rows.borrow().clone();
+                        if !rows.is_empty() {
+                            ui.render(rows);
+                        }
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {

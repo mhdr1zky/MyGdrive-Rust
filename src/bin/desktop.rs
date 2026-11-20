@@ -57,6 +57,9 @@ struct Args {
     /// Start the saved service, preserving its paused state. Used by opt-in autostart.
     #[arg(long)]
     start_service: bool,
+    /// Do not start the synchronization service automatically on launch.
+    #[arg(long)]
+    no_start_service: bool,
     /// Open the offline file/folder browser (render only with --snapshot).
     #[arg(long)]
     offline: bool,
@@ -131,6 +134,10 @@ struct Widgets {
     stop: gtk::Button,
     open: gtk::Button,
     drive: gtk::Button,
+    // Dedicated re-auth view
+    root_stack: gtk::Stack,
+    reauth_account_label: gtk::Label,
+    reauth_waiting: gtk::Label,
 }
 impl Widgets {
     fn render(&self, snapshot: &Snapshot, busy: bool) {
@@ -139,6 +146,27 @@ impl Widgets {
         let active = snapshot.live && status.is_some_and(|s| !s.shutdown_requested);
         let paused = status.is_some_and(|s| s.paused);
         let notice = snapshot.notice();
+        // Switch root stack between dedicated reauth page and normal dashboard.
+        let needs_login = notice == Some(dashboard::Notice::AuthRequired);
+        if needs_login {
+            // Update reauth page labels before switching.
+            let email = snapshot
+                .account
+                .as_ref()
+                .map(|a| a.email.as_str())
+                .unwrap_or("");
+            if email.is_empty() {
+                self.reauth_account_label.set_text(tr("Sesi login Google telah berakhir."));
+            } else {
+                self.reauth_account_label.set_text(
+                    &fmt("Akun: {}", &[("0", email.to_owned())]),
+                );
+            }
+            self.root_stack.set_visible_child_name("reauth");
+        } else {
+            self.reauth_waiting.set_visible(false);
+            self.root_stack.set_visible_child_name("dashboard");
+        }
         if notice.is_some() || !active || paused {
             self.status_icon.add_css_class("warning");
         } else {
@@ -155,7 +183,6 @@ impl Widgets {
             } else {
                 "emblem-ok-symbolic"
             }));
-        let needs_login = notice == Some(dashboard::Notice::AuthRequired);
         self.stage.set_visible(!needs_login);
         if needs_login {
             self.status_card.add_css_class("auth-required");
@@ -289,9 +316,23 @@ impl Widgets {
                 Some("offline") => {
                     tr("Drive belum dapat dijangkau. Perubahan lokal tetap dicatat.")
                 }
-                Some(_) => tr(
-                    "Ada operasi yang perlu diperiksa. Lihat status file dan diagnostik service.",
-                ),
+                Some("storage_quota_exceeded") => {
+                    tr("Penyimpanan Google Drive penuh. Kosongkan ruang atau tambah kuota; aplikasi akan mencoba lagi.")
+                }
+                Some("permission_denied") => {
+                    tr("Akses ke folder lokal ditolak. Periksa izin folder sinkronisasi.")
+                }
+                Some("not_found") => {
+                    tr("Folder atau file tidak ditemukan di Drive. Mungkin telah dihapus atau dipindah.")
+                }
+                Some(msg) => {
+                    // Show the actual error message if it's human-readable, else a generic hint.
+                    if msg.len() < 120 && msg.contains(char::is_alphabetic) {
+                        msg
+                    } else {
+                        tr("Sinkronisasi gagal. Periksa koneksi internet dan izin folder, lalu coba Sinkronkan sekarang.")
+                    }
+                }
             });
         } else {
             if let Some(config) = snapshot.configuration() {
@@ -381,7 +422,7 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         None => return,
     };
     let relaunch = restart::Launcher::capture(&tray_state, &binary).ok();
-    let controller = match dashboard::spawn_observer(state, binary.clone(), !snapshot_mode) {
+    let controller = match dashboard::spawn_observer(state.clone(), binary.clone(), !snapshot_mode) {
         Ok(c) => Rc::new(c),
         Err(_) => return,
     };
@@ -398,8 +439,8 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         gtk::ApplicationWindow::builder()
             .application(app)
             .title("MyGdrive Rust")
-            .default_width(780)
-            .default_height(740)
+            .default_width(520)
+            .default_height(640)
             .build()
     });
     let lifecycle = Rc::new(RefCell::new(PageLifecycle::default()));
@@ -436,7 +477,6 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         .build();
     nav.add_css_class("drive-tabs");
     let activity_button = gtk::Button::with_label(tr("Aktivitas sinkronisasi"));
-    let settings = gtk::Button::with_label(tr("Akun dan folder"));
     let offline_button = gtk::Button::with_label(tr("Tersedia offline"));
     let maintenance_button = gtk::Button::with_label(tr("Penyimpanan dan pemulihan"));
     navigation.append(&nav);
@@ -448,9 +488,9 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     settings_content.add_css_class("content");
     settings_content.append(&label(tr("Pengaturan"), "title"));
     let preferences = card();
-    preferences.append(&label(tr("Akun dan folder"), "section-title"));
+    preferences.append(&label(tr("Preferensi"), "section-title"));
     let preferences_actions = flow();
-    for button in [&settings, &offline_button, &maintenance_button] {
+    for button in [&offline_button, &maintenance_button] {
         preferences_actions.insert(button, -1);
     }
     preferences.append(&preferences_actions);
@@ -615,7 +655,67 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     pages.set_visible_child_name("home");
     shell.append(&pages);
     shell.append(&feedback);
-    window.set_child(Some(&shell));
+    // ── Dedicated re-authentication page ──────────────────────────────────────
+    // Shown in place of the full dashboard when the service reports AuthRequired.
+    let reauth_page = column(32);
+    reauth_page.add_css_class("content");
+    reauth_page.set_vexpand(true);
+    reauth_page.set_valign(gtk::Align::Center);
+    reauth_page.set_halign(gtk::Align::Center);
+    reauth_page.set_width_request(380);
+    let reauth_avatar = {
+        let lbl = gtk::Label::new(Some("G"));
+        lbl.add_css_class("reauth-avatar");
+        lbl.set_halign(gtk::Align::Center);
+        lbl.set_xalign(0.5);
+        lbl.set_yalign(0.5);
+        lbl.set_justify(gtk::Justification::Center);
+        lbl
+    };
+    reauth_page.append(&reauth_avatar);
+    let reauth_title = label(tr("Login Ulang Diperlukan"), "reauth-title");
+    reauth_title.set_halign(gtk::Align::Center);
+    reauth_title.set_xalign(0.5);
+    reauth_page.append(&reauth_title);
+    let reauth_account_label = label("", "subtitle");
+    reauth_account_label.set_halign(gtk::Align::Center);
+    reauth_account_label.set_xalign(0.5);
+    reauth_account_label.set_selectable(true);
+    reauth_page.append(&reauth_account_label);
+    let reauth_desc = label(
+        tr("Sesi otentikasi Google untuk akun ini telah berakhir. Klik tombol di bawah untuk login kembali melalui browser, lalu sinkronisasi akan otomatis dilanjutkan."),
+        "subtitle",
+    );
+    reauth_desc.set_xalign(0.5);
+    reauth_desc.set_halign(gtk::Align::Center);
+    reauth_desc.set_wrap(true);
+    reauth_page.append(&reauth_desc);
+    let reauth_btn = gtk::Button::with_label(tr("Login dengan Google"));
+    reauth_btn.add_css_class("suggested-action");
+    reauth_btn.add_css_class("reauth-btn");
+    reauth_btn.set_action_name(Some("app.reauthenticate"));
+    reauth_btn.set_halign(gtk::Align::Center);
+    reauth_page.append(&reauth_btn);
+    let reauth_waiting = label(tr("Menunggu otentikasi dari browser…"), "subtitle");
+    reauth_waiting.set_halign(gtk::Align::Center);
+    reauth_waiting.set_xalign(0.5);
+    reauth_waiting.set_visible(false);
+    reauth_page.append(&reauth_waiting);
+    let reauth_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .child(&reauth_page)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    // Root stack switches between the normal dashboard and reauth page.
+    let root_stack = gtk::Stack::builder()
+        .transition_type(gtk::StackTransitionType::Crossfade)
+        .transition_duration(200)
+        .build();
+    root_stack.add_named(&shell, Some("dashboard"));
+    root_stack.add_named(&reauth_scroll, Some("reauth"));
+    root_stack.set_visible_child_name("dashboard");
+    window.set_child(Some(&root_stack));
     {
         let weak = window.downgrade();
         let state = setup_state.clone();
@@ -656,12 +756,16 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         stop,
         open,
         drive,
+        root_stack,
+        reauth_account_label,
+        reauth_waiting: reauth_waiting.clone(),
     });
     let current = Rc::new(RefCell::new(Snapshot {
         live: false,
         status: None,
         config: None,
         account: None,
+        signed_out: false,
     }));
     let accounts_action = gio::SimpleAction::new("accounts", None);
     let parent = window.downgrade();
@@ -672,18 +776,6 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         }
     });
     app.add_action(&accounts_action);
-    let reauth_action = gio::SimpleAction::new("reauthenticate", None);
-    let parent = window.downgrade();
-    let account_state = setup_state.clone();
-    let installation_busy = updating.clone();
-    reauth_action.connect_activate(move |_, _| {
-        if !installation_busy.get() {
-            if let Some(parent) = parent.upgrade() {
-                setup::show_reauthentication(&parent, account_state.clone(), snapshot_mode);
-            }
-        }
-    });
-    app.add_action(&reauth_action);
     let progress = Rc::new(progress::Popup::new(&window, snapshot_mode));
     let progress_action = gio::SimpleAction::new_stateful("progress", None, &false.to_variant());
     let activity_pages = pages.clone();
@@ -891,13 +983,33 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
                 state,
                 snapshot_path: None,
                 background: false,
-                start_service: false,
+                start_service: true,
                 language: switch_language.clone(),
             },
             Some(window),
         );
         true
     });
+    let reauth_action = gio::SimpleAction::new("reauthenticate", None);
+    let reauth_parent = window.downgrade();
+    let reauth_account_state = setup_state.clone();
+    let reauth_installation_busy = updating.clone();
+    let reauth_select = selected.clone();
+    let reauth_waiting_lbl = reauth_waiting.clone();
+    reauth_action.connect_activate(move |_, _| {
+        if !reauth_installation_busy.get() {
+            if let Some(parent) = reauth_parent.upgrade() {
+                reauth_waiting_lbl.set_visible(true);
+                setup::show_reauthentication(
+                    &parent,
+                    reauth_account_state.clone(),
+                    snapshot_mode,
+                    Some(reauth_select.clone()),
+                );
+            }
+        }
+    });
+    app.add_action(&reauth_action);
     let account_switcher = accounts::Switcher::new(
         &window,
         tray_state.clone(),
@@ -942,8 +1054,6 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
         let switcher = account_switcher.as_ref().unwrap().clone();
         action.connect_activate(move |_, _| switcher.manage());
         app.add_action(&action);
-        let switcher = account_switcher.as_ref().unwrap().clone();
-        settings.connect_clicked(move |_| switcher.manage());
     }
     let restart_in_progress = Rc::new(Cell::new(false));
     let restart_for_close = restart_in_progress.clone();
@@ -959,7 +1069,8 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
     let progress_for_open = progress.clone();
     let mut last_cycle = None;
     let mut queued_files = 0;
-    if start_service && !snapshot_mode && controller.commands.try_send(Command::Start).is_ok() {
+    let has_saved_config = mygdrive_sync::service::config_path(&state).is_file();
+    if start_service && has_saved_config && !snapshot_mode && controller.commands.try_send(Command::Start).is_ok() {
         busy.set(true);
         feedback.set_text(tr("Memulai service dari konfigurasi tersimpan…"));
     }
@@ -1115,6 +1226,15 @@ fn build(app: &gtk::Application, request: BuildRequest, reuse: Option<gtk::Appli
                             activity
                                 .set_text(&history.iter().cloned().collect::<Vec<_>>().join("\n"));
                         }
+                    }
+                    let was_needs_login = current.borrow().live
+                        && current.borrow().notice() == Some(dashboard::Notice::AuthRequired);
+                    let now_needs_login = snapshot.live
+                        && snapshot.notice() == Some(dashboard::Notice::AuthRequired);
+                    if was_needs_login && !now_needs_login {
+                        feedback.set_text(tr(
+                            "Login ulang akun Google berhasil dideteksi. Sinkronisasi aktif kembali.",
+                        ));
                     }
                     *current.borrow_mut() = *snapshot;
                     progress.refresh_status(&current.borrow());
@@ -1282,6 +1402,7 @@ fn absolute_state(state: PathBuf) -> PathBuf {
         .unwrap_or_else(|_| std::path::absolute(&state).unwrap_or(state))
 }
 fn request_for(args: &Args, state: PathBuf, language: &str) -> BuildRequest {
+    let start_service = !args.no_start_service && !args.restore_accounts && args.snapshot.is_none();
     BuildRequest {
         state,
         snapshot_path: args.snapshot.clone(),
@@ -1293,7 +1414,7 @@ fn request_for(args: &Args, state: PathBuf, language: &str) -> BuildRequest {
             args.accounts,
         ),
         background: args.background,
-        start_service: args.start_service && !args.restore_accounts,
+        start_service,
         language: language.to_owned(),
     }
 }
@@ -1366,7 +1487,8 @@ fn main() -> glib::ExitCode {
         if app.windows().is_empty() {
             build(app, request_for(&incoming, state, &language), None);
         } else {
-            if incoming.start_service && !incoming.restore_accounts {
+            let start_service = !incoming.no_start_service && !incoming.restore_accounts && incoming.snapshot.is_none();
+            if start_service {
                 let base = collection.clone();
                 let state = state.clone();
                 let binary = std::env::current_exe()
@@ -1679,5 +1801,45 @@ mod account_ui_tests {
             window.destroy();
         }
         app.quit();
+    }
+
+    #[test]
+    fn request_for_defaults_to_starting_service_unless_opted_out_or_snapshot() {
+        let dummy = PathBuf::from("/tmp/state");
+        let default_args = Args {
+            language: None,
+            state: None,
+            snapshot: None,
+            setup: false,
+            background: false,
+            start_service: false,
+            no_start_service: false,
+            offline: false,
+            progress: false,
+            maintenance: false,
+            accounts: false,
+            restore_accounts: false,
+        };
+        // Default launch starts the service automatically if not active
+        let req = request_for(&default_args, dummy.clone(), "id");
+        assert!(req.start_service);
+
+        // Opt out via --no-start-service
+        let mut opt_out = default_args.clone();
+        opt_out.no_start_service = true;
+        let req = request_for(&opt_out, dummy.clone(), "id");
+        assert!(!req.start_service);
+
+        // Snapshot mode disables auto start
+        let mut snapshot_args = default_args.clone();
+        snapshot_args.snapshot = Some(PathBuf::from("/tmp/snap.png"));
+        let req = request_for(&snapshot_args, dummy.clone(), "id");
+        assert!(!req.start_service);
+
+        // Restore accounts flow handles start separately
+        let mut restore_args = default_args;
+        restore_args.restore_accounts = true;
+        let req = request_for(&restore_args, dummy, "id");
+        assert!(!req.start_service);
     }
 }

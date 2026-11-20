@@ -12,6 +12,45 @@ use wiremock::{
 };
 
 struct TestToken;
+
+#[tokio::test]
+async fn stalled_initial_folder_check_times_out_before_blocking_reconnection() {
+    use tokio::{io::AsyncReadExt, net::TcpListener, sync::oneshot, time};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/drive/v3/", listener.local_addr().unwrap());
+    let client = HttpDriveClient::with_endpoints(Arc::new(TestToken), &base, &base).unwrap();
+    let (received, request_received) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(socket.read_u8().await.unwrap());
+        }
+        received.send(()).unwrap();
+        let _ = released.await;
+    });
+    let check = tokio::spawn(async move { client.get("root").await });
+    // Advance only after HTTP has reached the peer, so real socket setup does
+    // not race the simulated timeout. The peer deliberately never responds.
+    request_received.await.unwrap();
+    time::pause();
+    time::advance(std::time::Duration::from_secs(31)).await;
+    let error = time::timeout(std::time::Duration::from_secs(1), check)
+        .await
+        .expect("initial folder check exceeded the metadata timeout")
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(error, Error::Transport(ref e) if e.is_timeout()));
+    assert_eq!(
+        mygdrive_sync::connectivity::ConnectionState::from_error(&error),
+        mygdrive_sync::connectivity::ConnectionState::Offline,
+    );
+    time::resume();
+    release.send(()).unwrap();
+    server.await.unwrap();
+}
+
 #[async_trait]
 impl AccessTokenProvider for TestToken {
     async fn access_token(&self) -> Result<String> {

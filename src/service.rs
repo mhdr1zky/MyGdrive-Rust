@@ -213,6 +213,14 @@ impl Control {
                 Action::SyncNow => {
                     if !self.status.paused {
                         self.status.sync_requested = true;
+                        // After a successful re-login, the desktop sends SyncNow
+                        // via notify_reauthenticated(). Clear the stale AuthRequired
+                        // state immediately so the UI stops showing "login required"
+                        // before the next sync cycle finishes.
+                        if self.status.connection == ConnectionState::AuthRequired {
+                            self.status.connection = ConnectionState::Connecting;
+                            self.status.last_error = None;
+                        }
                     }
                 }
                 Action::Shutdown => {
@@ -605,10 +613,37 @@ pub async fn send(state: &Path, request: &Request) -> Result<Reply> {
     .map_err(|_| Error::Invalid("service control timed out".into()))?
 }
 fn error_kind(error: &Error) -> String {
-    serde_json::to_value(ConnectionState::from_error(error))
+    // Map well-known error types to stable UI keys first.
+    match error {
+        Error::AuthRequired => return "auth_required".into(),
+        Error::Http { status: 403, reason } if reason == "storageQuotaExceeded" => {
+            return "storage_quota_exceeded".into();
+        }
+        Error::Http { status: 403, reason } if reason == "forbidden" || reason.contains("permission") => {
+            return "permission_denied".into();
+        }
+        Error::Http { status: 404, .. } => return "not_found".into(),
+        _ => {}
+    }
+    // Fall back to ConnectionState for transport / rate-limit categories.
+    let state_key = serde_json::to_value(ConnectionState::from_error(error))
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "service_error".into())
+        .unwrap_or_else(|| "service_error".into());
+    if state_key == "service_error" {
+        // Provide a human-readable hint from the error chain, truncated for safety.
+        let msg = error.to_string();
+        tracing::error!(error = %msg, "sync cycle failed");
+        // Avoid leaking full paths or tokens; cap and sanitise.
+        let safe = msg
+            .chars()
+            .filter(|c| c.is_ascii() && *c != '\n' && *c != '\r')
+            .take(100)
+            .collect::<String>();
+        if safe.is_empty() { "service_error".into() } else { safe }
+    } else {
+        state_key
+    }
 }
 
 fn next_poll_deadline(
@@ -626,6 +661,20 @@ fn next_poll_deadline(
         // Network/authentication failures keep the full retry backoff.
         finished + delay
     }
+}
+
+fn retry_delay_seconds(error: &Error, interval: u64, failures: u32) -> u64 {
+    if matches!(error, Error::AuthRequired) {
+        return interval.max(60);
+    }
+    // Offline recovery must remain responsive even with a long sync interval.
+    // Keep the longer backoff for server errors and rate limits.
+    let cap = if ConnectionState::from_error(error) == ConnectionState::Offline {
+        30
+    } else {
+        300
+    };
+    interval.saturating_mul(1u64 << failures.min(5)).min(cap)
 }
 async fn schedule(
     engine: Arc<SyncEngine>,
@@ -687,7 +736,9 @@ async fn schedule(
                     c.status.last_error = if report.errors.is_empty() {
                         None
                     } else {
-                        Some("one or more file operations failed; review file status".into())
+                        let n = report.errors.len();
+                        tracing::warn!(count = n, "sync completed with file-level errors");
+                        Some(format!("{n} file operation(s) failed; review file status"))
                     };
                     if report.errors.is_empty() {
                         c.status.last_success_ms = Some(now_ms());
@@ -708,14 +759,7 @@ async fn schedule(
                     failures = failures.saturating_add(1);
                     c.status.connection = ConnectionState::from_error(&e);
                     c.status.last_error = Some(error_kind(&e));
-                    if matches!(e, Error::AuthRequired) {
-                        config.interval_seconds.max(60)
-                    } else {
-                        config
-                            .interval_seconds
-                            .saturating_mul(1u64 << failures.min(5))
-                            .min(300)
-                    }
+                    retry_delay_seconds(&e, config.interval_seconds, failures)
                 }
             };
             c.status.phase = if c.status.shutdown_requested {
@@ -1008,6 +1052,33 @@ mod reader_tests {
 mod cadence_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn offline_retry_is_bounded_independently_of_sync_interval() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let error = Error::Transport(
+            reqwest::Client::new()
+                .get(format!("http://{address}"))
+                .send()
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(
+            ConnectionState::from_error(&error),
+            ConnectionState::Offline
+        );
+        assert_eq!(retry_delay_seconds(&error, 10, 1), 20);
+        assert_eq!(retry_delay_seconds(&error, 10, 2), 30);
+        assert_eq!(retry_delay_seconds(&error, 3600, 100), 30);
+        assert_eq!(retry_delay_seconds(&Error::AuthRequired, 10, 1), 60);
+        let throttled = Error::Http {
+            status: 429,
+            reason: "rate limit".into(),
+        };
+        assert_eq!(retry_delay_seconds(&throttled, 10, 5), 300);
+    }
+
     #[test]
     fn successful_checks_keep_the_start_cadence_and_long_checks_still_rest() {
         let start = Instant::now();
@@ -1028,5 +1099,90 @@ mod cadence_tests {
             next_poll_deadline(start, start + Duration::from_secs(12), 60, false),
             start + Duration::from_secs(72)
         );
+    }
+
+    fn test_control() -> Control {
+        Control {
+            status: ServiceStatus {
+                version: VERSION,
+                session_id: uuid::Uuid::new_v4().to_string(),
+                pid: std::process::id(),
+                running: true,
+                started_at_ms: crate::now_ms(),
+                heartbeat_at_ms: crate::now_ms(),
+                stopped_at_ms: None,
+                config: ServiceConfig {
+                    version: 1,
+                    account: "default".into(),
+                    root: PathBuf::from("/tmp/test-sync"),
+                    drive_folder: "root".into(),
+                    interval_seconds: 10,
+                    cache_max_bytes: None,
+                },
+                phase: "idle".into(),
+                connection: ConnectionState::AuthRequired,
+                paused: false,
+                cycle_active: false,
+                sync_requested: false,
+                shutdown_requested: false,
+                local_watcher_active: true,
+                last_sync_started_ms: None,
+                last_sync_finished_ms: None,
+                last_success_ms: None,
+                cycles_finished: 0,
+                pending_operations: 0,
+                pending_files: 0,
+                progress: crate::engine::SyncProgress::default(),
+                last_report: None,
+                last_error: Some("auth_required".into()),
+            },
+            recent: VecDeque::new(),
+            local_wake: 0,
+        }
+    }
+
+    #[test]
+    fn sync_now_clears_auth_required_after_relogin() {
+        let mut control = test_control();
+        assert_eq!(control.status.connection, ConnectionState::AuthRequired);
+        assert_eq!(control.status.last_error.as_deref(), Some("auth_required"));
+
+        let mut request = Request::new(Action::SyncNow);
+        request.session_id = Some(control.status.session_id.clone());
+        let reply = control.apply(&request);
+
+        assert!(reply.accepted);
+        assert!(control.status.sync_requested);
+        assert_eq!(control.status.connection, ConnectionState::Connecting);
+        assert!(control.status.last_error.is_none());
+    }
+
+    #[test]
+    fn sync_now_does_not_clear_non_auth_connection_states() {
+        let mut control = test_control();
+        control.status.connection = ConnectionState::Offline;
+        control.status.last_error = Some("offline".into());
+
+        let mut request = Request::new(Action::SyncNow);
+        request.session_id = Some(control.status.session_id.clone());
+        let reply = control.apply(&request);
+
+        assert!(reply.accepted);
+        assert_eq!(control.status.connection, ConnectionState::Offline);
+        assert_eq!(control.status.last_error.as_deref(), Some("offline"));
+    }
+
+    #[test]
+    fn sync_now_while_paused_rejects_and_keeps_auth_state() {
+        let mut control = test_control();
+        control.status.paused = true;
+
+        let mut request = Request::new(Action::SyncNow);
+        request.session_id = Some(control.status.session_id.clone());
+        let reply = control.apply(&request);
+
+        assert!(!reply.accepted);
+        assert_eq!(control.status.connection, ConnectionState::AuthRequired);
+        assert_eq!(control.status.last_error.as_deref(), Some("auth_required"));
     }
 }
